@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple;
 
-our $VERSION = '0.0201';
+our $VERSION = '0.0301';
 
 use Carp 'croak';
 use DBI;
@@ -323,8 +323,8 @@ sub _build_bind_values {
                             !$no_bind_filters_map->{$original_key})
                         {
                             push @bind_values, 
-                                 $bind_filter->($original_key, 
-                                                $root_params->[$current_key->[0]],
+                                 $bind_filter->($root_params->[$current_key->[0]], 
+                                                $original_key,
                                                 $table, $column);
                         }
                         # Not filtering
@@ -344,8 +344,8 @@ sub _build_bind_values {
                             !$no_bind_filters_map->{$original_key}) 
                         {
                             push @bind_values,
-                                 $bind_filter->($original_key,
-                                                $root_params->{$current_key}, 
+                                 $bind_filter->($root_params->{$current_key},
+                                                $original_key,
                                                 $table, $column);
                         }
                         # Not filtering
@@ -736,7 +736,7 @@ DBIx::Custom - Customizable simple DBI
 
 =head1 VERSION
 
-Version 0.0201
+Version 0.0301
 
 =head1 CAUTION
 
