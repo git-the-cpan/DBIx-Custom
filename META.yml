@@ -1,6 +1,6 @@
 ---
 name: DBIx-Custom
-version: 0.0301
+version: 0.0401
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 abstract: Customizable simple DBI
@@ -20,7 +20,7 @@ recommends:
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.0301
+    version: 0.0401
 generated_by: Module::Build version 0.31012
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html
