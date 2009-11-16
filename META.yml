@@ -1,6 +1,6 @@
 ---
 name: DBIx-Custom
-version: 0.0401
+version: 0.0501
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 abstract: Customizable simple DBI
@@ -9,18 +9,30 @@ resources:
   license: ~
 requires:
   DBI: 1.605
-  DBIx::Custom::Query: 0.0101
-  DBIx::Custom::Result: 0.0101
-  DBIx::Custom::SQL::Template: 0.0101
   Object::Simple: 2.0702
 build_requires:
   Test::More: 0
 recommends:
   DBD::SQLite: 1.25
+  Time::Piece: 1.15
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.0401
+    version: 0.0501
+  DBIx::Custom::Basic:
+    file: lib/DBIx/Custom/Basic.pm
+  DBIx::Custom::MySQL:
+    file: lib/DBIx/Custom/MySQL.pm
+  DBIx::Custom::Query:
+    file: lib/DBIx/Custom/Query.pm
+  DBIx::Custom::Result:
+    file: lib/DBIx/Custom/Result.pm
+  DBIx::Custom::SQL::Template:
+    file: lib/DBIx/Custom/SQL/Template.pm
+  DBIx::Custom::SQL::Template::TagProcessor:
+    file: lib/DBIx/Custom/SQL/Template.pm
+  DBIx::Custom::SQLite:
+    file: lib/DBIx/Custom/SQLite.pm
 generated_by: Module::Build version 0.31012
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

@@ -5,8 +5,8 @@ use warnings;
 BEGIN {
     eval { require DBD::SQLite; 1 }
         or plan skip_all => 'DBD::SQLite required';
-    eval { DBD::SQLite->VERSION >= 1 }
-        or plan skip_all => 'DBD::SQLite >= 1.00 required';
+    eval { DBD::SQLite->VERSION >= 1.25 }
+        or plan skip_all => 'DBD::SQLite >= 1.25 required';
 
     plan 'no_plan';
     use_ok('DBIx::Custom');

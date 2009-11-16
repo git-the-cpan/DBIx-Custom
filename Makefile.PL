@@ -8,10 +8,7 @@ WriteMakefile
           'VERSION_FROM' => 'lib/DBIx/Custom.pm',
           'PREREQ_PM' => {
                            'Test::More' => 0,
-                           'DBIx::Custom::Query' => '0.0101',
                            'Object::Simple' => '2.0702',
-                           'DBIx::Custom::Result' => '0.0101',
-                           'DBIx::Custom::SQL::Template' => '0.0101',
                            'DBI' => '1.605'
                          }
         )
