@@ -3,6 +3,7 @@ use base 'DBIx::Custom::Basic';
 
 use warnings;
 use strict;
+use Carp 'croak';
 
 my $class = __PACKAGE__;
 
@@ -16,20 +17,37 @@ $class->add_format(
 sub connect {
     my $self = shift;
     
-    if (!$self->data_source && (my $database = $self->database)) {
-        $self->data_source("dbi:mysql:dbname=$database");
+    if (!$self->data_source) {
+        my $database = $self->database;
+        my $host     = $self->host;
+        my $port     = $self->port;
+        
+        my $data_source = "dbi:mysql:";
+        my $data_source_original = $data_source;
+        $data_source .= "database=$database;" if $database;
+        $data_source .= "host=$host;"         if $host;
+        $data_source .= "port=$port;"         if $port;
+        
+        $data_source =~ s/:$// if $data_source eq $data_source_original;
+        $self->data_source($data_source);
     }
     
     return $self->SUPER::connect;
 }
 
+sub last_insert_id {
+    my $self = shift;
+    
+    croak "Not yet connected" unless $self->connected;
+    
+    my $last_insert_id = $self->dbh->{mysql_insertid};
+    
+    return $last_insert_id;
+}
+
 =head1 NAME
 
 DBIx::Custom::MySQL - DBIx::Custom MySQL implementation
-
-=head1 Version
-
-Version 0.0102
 
 =head1 Synopsys
 
@@ -68,6 +86,15 @@ Please see L<DBIx::Custom::Basic> and <DBIx::Custom> documentation.
     
     If database attribute is set, automatically data source is created and connect
 
+=head2 last_insert_id
+
+    # Get last insert id
+    $last_insert_id = $self->last_insert_id;
+
+This is equal to MySQL function
+
+    last_insert_id()
+    
 =head1 Author
 
 Yuki Kimoto, C<< <kimoto.yuki at gmail.com> >>

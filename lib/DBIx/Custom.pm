@@ -3,7 +3,7 @@ use 5.008001;
 package DBIx::Custom;
 use Object::Simple;
 
-our $VERSION = '0.0501';
+our $VERSION = '0.0502';
 
 use Carp 'croak';
 use DBI;
@@ -19,6 +19,8 @@ sub data_source : ClassObjectAttr { initialize => {clone => 'scalar'} }
 sub dbi_options : ClassObjectAttr { initialize => {clone => 'hash', 
                                                    default => sub { {} } } }
 sub database    : ClassObjectAttr { initialize => {clone => 'scalar'} }
+sub host        : ClassObjectAttr { initialize => {clone => 'scalar'} }
+sub port        : ClassObjectAttr { initialize => {clone => 'scalar'} }
 
 sub bind_filter  : ClassObjectAttr { initialize => {clone => 'scalar'} }
 sub fetch_filter : ClassObjectAttr { initialize => {clone => 'scalar'} }
@@ -448,19 +450,17 @@ sub run_transaction {
 # Get last insert id
 sub last_insert_id {
     my $self = shift;
-    
-    # Not connected
-    croak("Not yet connect to database")
-      unless $self->connected;
-    
-    return $self->dbh->last_insert_id(@_);
+    my $class = ref $self;
+    croak "'$class' do not suppert 'last_insert_id'";
 }
 
 # Insert
 sub insert {
-    my ($self, $table, $insert_params, $query_edit_cb) = @_;
-    $table         ||= '';
-    $insert_params ||= {};
+    my $self             = shift;
+    my $table            = shift || '';
+    my $insert_params    = shift || {};
+    my $append_statement = shift unless ref $_[0];
+    my $query_edit_cb    = shift;
     
     # Insert keys
     my @insert_keys = keys %$insert_params;
@@ -471,7 +471,7 @@ sub insert {
     
     # Templte for insert
     my $template = "insert into $table {insert " . join(' ', @insert_keys) . '}';
-    
+    $template .= " $append_statement" if $append_statement;
     # Create query
     my $query = $self->create_query($template);
     
@@ -490,12 +490,13 @@ sub insert {
 
 # Update
 sub update {
-    my ($self, $table, $update_params,
-        $where_params, $query_edit_cb, $options) = @_;
-    
-    $table         ||= '';
-    $update_params ||= {};
-    $where_params  ||= {};
+    my $self             = shift;
+    my $table            = shift || '';
+    my $update_params    = shift || {};
+    my $where_params     = shift || {};
+    my $append_statement = shift unless ref $_[0];
+    my $query_edit_cb    = shift;
+    my $options          = shift;
     
     # Update keys
     my @update_keys = keys %$update_params;
@@ -526,6 +527,7 @@ sub update {
     
     # Template for update
     my $template = "update $table $update_clause $where_clause";
+    $template .= " $append_statement" if $append_statement;
     
     # Create query
     my $query = $self->create_query($template);
@@ -548,17 +550,25 @@ sub update {
 
 # Update all rows
 sub update_all {
-    my ($self, $table, $update_params, $query_edit_cb) = @_;
+    my $self             = shift;
+    my $table            = shift || '';
+    my $update_params    = shift || {};
+    my $append_statement = shift unless ref $_[0];
+    my $query_edit_cb    = shift;
+    my $options          = {allow_update_all => 1};
     
-    return $self->update($table, $update_params, {}, $query_edit_cb,
-                         {allow_update_all => 1});
+    return $self->update($table, $update_params, {}, $append_statement,
+                         $query_edit_cb, $options);
 }
 
 # Delete
 sub delete {
-    my ($self, $table, $where_params, $query_edit_cb, $options) = @_;
-    $table        ||= '';
-    $where_params ||= {};
+    my $self             = shift;
+    my $table            = shift || '';
+    my $where_params     = shift || {};
+    my $append_statement = shift unless ref $_[0];
+    my $query_edit_cb    = shift;
+    my $options          = shift;
     
     # Where keys
     my @where_keys = keys %$where_params;
@@ -579,6 +589,7 @@ sub delete {
     
     # Template for delete
     my $template = "delete from $table $where_clause";
+    $template .= " $append_statement" if $append_statement;
     
     # Create query
     my $query = $self->create_query($template);
@@ -598,8 +609,14 @@ sub delete {
 
 # Delete all rows
 sub delete_all {
-    my ($self, $table) = @_;
-    return $self->delete($table, {}, undef, {allow_delete_all => 1});
+    my $self             = shift;
+    my $table            = shift || '';
+    my $append_statement = shift unless ref $_[0];
+    my $query_edit_cb    = shift;
+    my $options          = {allow_delete_all => 1};
+    
+    return $self->delete($table, {}, $append_statement, $query_edit_cb,
+                         $options);
 }
 
 sub _select_usage { return << 'EOS' }
@@ -738,7 +755,7 @@ DBIx::Custom - Customizable simple DBI
 
 =head1 VERSION
 
-Version 0.0501
+Version 0.0502
 
 =head1 CAUTION
 
@@ -796,6 +813,18 @@ Please tell me bug if you find
     # Set and get database name
     $self     = $dbi->database($database);
     $database = $dbi->database;
+
+=head2 host
+
+    # Set and get host name
+    $self = $dbi->host($host);
+    $host = $dbi->host;
+
+=head2 port
+
+    # Set and get port
+    $self = $dbi->port($port);
+    $port = $dbi->port;
 
 This method will be used in subclass connect method.
 

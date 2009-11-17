@@ -1,6 +1,6 @@
 ---
 name: DBIx-Custom
-version: 0.0501
+version: 0.0502
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 abstract: Customizable simple DBI
@@ -18,7 +18,7 @@ recommends:
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.0501
+    version: 0.0502
   DBIx::Custom::Basic:
     file: lib/DBIx/Custom/Basic.pm
   DBIx::Custom::MySQL:

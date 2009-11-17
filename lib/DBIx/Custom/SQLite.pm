@@ -1,8 +1,8 @@
 package DBIx::Custom::SQLite;
 use base 'DBIx::Custom::Basic';
 
-use warnings;
 use strict;
+use warnings;
 use Carp 'croak';
 
 my $class = __PACKAGE__;
@@ -50,14 +50,19 @@ sub reconnect_memory {
     return $self;
 }
 
+sub last_insert_id {
+    my $self = shift;
+    
+    croak "Not yet connected" unless $self->connected;
+    
+    my $last_insert_id = $self->dbh->func('last_insert_rowid');
+    
+    return $last_insert_id;
+}
 
 =head1 NAME
 
 DBIx::Custom::SQLite - DBIx::Custom SQLite implementation
-
-=head1 Version
-
-Version 0.0201
 
 =head1 Synopsys
 
@@ -118,6 +123,15 @@ If database attribute is set, automatically data source is created and connect
 
     # Reconnect memory database
     $self = $dbi->reconnect_memory;
+
+=head2 last_insert_id
+
+    # Get last insert id
+    $last_insert_id = $self->last_insert_id;
+
+This is equal to SQLite function
+
+    last_insert_rowid()
 
 =head1 Author
 

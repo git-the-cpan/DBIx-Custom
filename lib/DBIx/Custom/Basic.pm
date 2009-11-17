@@ -1,10 +1,9 @@
 package DBIx::Custom::Basic;
-use 5.008001;
 use base 'DBIx::Custom';
-use Encode qw/decode encode/;
 
 use warnings;
 use strict;
+use Encode qw/decode encode/;
 
 my $class = __PACKAGE__;
 
@@ -38,10 +37,6 @@ sub utf8_filter_on {
 =head1 NAME
 
 DBIx::Custom::Basic - DBIx::Custom basic implementation
-
-=head1 Version
-
-Version 0.0201
 
 =head1 See DBIx::Custom documentation
 
