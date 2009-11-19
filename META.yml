@@ -1,6 +1,6 @@
 ---
 name: DBIx-Custom
-version: 0.0601
+version: 0.0602
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 abstract: Customizable simple DBI
@@ -17,7 +17,7 @@ build_requires:
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.0601
+    version: 0.0602
   DBIx::Custom::Basic:
     file: lib/DBIx/Custom/Basic.pm
   DBIx::Custom::MySQL:
@@ -28,7 +28,7 @@ provides:
     file: lib/DBIx/Custom/Result.pm
   DBIx::Custom::SQL::Template:
     file: lib/DBIx/Custom/SQL/Template.pm
-  DBIx::Custom::SQL::Template::TagProcessor:
+  DBIx::Custom::SQL::Template::TagProcessors:
     file: lib/DBIx/Custom/SQL/Template.pm
   DBIx::Custom::SQLite:
     file: lib/DBIx/Custom/SQLite.pm
