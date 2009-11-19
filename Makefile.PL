@@ -9,6 +9,8 @@ WriteMakefile
           'PREREQ_PM' => {
                            'Test::More' => 0,
                            'Object::Simple' => '2.0702',
+                           'DBD::SQLite' => '1.25',
+                           'Time::Piece' => '1.15',
                            'DBI' => '1.605'
                          }
         )
