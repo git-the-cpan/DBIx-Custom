@@ -3,7 +3,7 @@ use 5.008001;
 package DBIx::Custom;
 use Object::Simple;
 
-our $VERSION = '0.0604';
+our $VERSION = '0.0605';
 
 use Carp 'croak';
 use DBI;
