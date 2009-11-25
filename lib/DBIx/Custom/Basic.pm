@@ -57,9 +57,6 @@ Please see L<DBIx::Custom> documentation
 
 Encode and decode utf8 filter on
 
-    $self = $self->utf8_filter_on;
-    
-    # Sample
     $dbi->utf8_filter_on;
 
 This equel to
@@ -71,7 +68,9 @@ This equel to
 
 =head2 encode_utf8
 
-    # Encode to UTF-8 byte stream (utf8::upgrade is done if need)
+Encode internal string to UTF-8 byte stream
+If need, utf8::upgrade is also done.
+
     $dbi->filters->{encode_utf8}->($value);
     
 This filter is generally used as bind filter
@@ -80,7 +79,7 @@ This filter is generally used as bind filter
 
 =head2 decode_utf8
 
-    # Decode to perl internal string
+Decode UTF-8 byte stream to internal string
     $dbi->filters->{decode_utf8}->($value);
     
 This filter is generally used as fetch filter
