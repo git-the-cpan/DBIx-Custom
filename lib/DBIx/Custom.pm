@@ -3,7 +3,7 @@ use 5.008001;
 package DBIx::Custom;
 use Object::Simple;
 
-our $VERSION = '0.0701';
+our $VERSION = '0.0702';
 
 use Carp 'croak';
 use DBI;
@@ -860,7 +860,7 @@ Set and get DBI option
 
 Set and get SQL::Template object
 
-    $dbi      = $dbi->sql_tmpl(DBI::Cutom::SQL::Template->new);
+    $dbi      = $dbi->sql_tmpl(DBIx::Cutom::SQL::Template->new);
     $sql_tmpl = $dbi->sql_tmpl;
 
 See also L<DBIx::Custom::SQL::Template>.
@@ -1203,7 +1203,7 @@ Select rows
         $query_edit_callback   # must be code reference.  this can be ommited
     );
 
-$reslt is L<DBI::Custom::Result> object
+$reslt is L<DBIx::Custom::Result> object
 
 The following is some select samples
 

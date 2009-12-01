@@ -55,7 +55,7 @@ DBIx::Custom::MySQL - DBIx::Custom MySQL implementation
     my $dbi = DBIx::Custom::MySQL->new(user => 'taro', $password => 'kliej&@K',
                                        database => 'sample_db');
 
-=head1 See DBIx::Custom and DBI::Custom::Basic documentation at first
+=head1 See DBIx::Custom and DBIx::Custom::Basic documentation at first
 
 This class is L<DBIx::Custom::Basic> subclass,
 and L<DBIx::Custom::Basic> is L<DBIx::Custom> subclass.

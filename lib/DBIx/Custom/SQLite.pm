@@ -75,7 +75,7 @@ DBIx::Custom::SQLite - DBIx::Custom SQLite implementation
     # Connect memory database
     my $dbi->connect_memory;
     
-=head1 See DBIx::Custom and DBI::Custom::Basic documentation at first
+=head1 See DBIx::Custom and DBIx::Custom::Basic documentation at first
 
 This class is L<DBIx::Custom::Basic> subclass.
 and L<DBIx::Custom::Basic> is L<DBIx::Custom> subclass
