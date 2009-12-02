@@ -3,7 +3,7 @@ use 5.008001;
 package DBIx::Custom;
 use Object::Simple;
 
-our $VERSION = '0.0702';
+our $VERSION = '0.0801';
 
 use Carp 'croak';
 use DBI;
@@ -75,7 +75,6 @@ sub dbh : Attr {}
 
 ### Methods
 
-# Add filter
 sub add_filter {
     my $invocant = shift;
     
@@ -85,7 +84,6 @@ sub add_filter {
     return $invocant;
 }
 
-# Add format
 sub add_format{
     my $invocant = shift;
     
@@ -95,7 +93,6 @@ sub add_format{
     return $invocant;
 }
 
-# Auto commit
 sub _auto_commit {
     my $self = shift;
     
@@ -108,7 +105,6 @@ sub _auto_commit {
     return $self->dbh->{AutoCommit};
 }
 
-# Connect
 sub connect {
     my $self = shift;
     my $data_source = $self->data_source;
@@ -134,19 +130,16 @@ sub connect {
     return $self;
 }
 
-# DESTROY
 sub DESTROY {
     my $self = shift;
     $self->disconnect if $self->connected;
 }
 
-# Is connected?
 sub connected {
     my $self = shift;
     return ref $self->{dbh} eq 'DBI::db';
 }
 
-# Disconnect
 sub disconnect {
     my $self = shift;
     if ($self->connected) {
@@ -155,14 +148,12 @@ sub disconnect {
     }
 }
 
-# Reconnect
 sub reconnect {
     my $self = shift;
     $self->disconnect if $self->connected;
     $self->connect;
 }
 
-# Prepare statement handle
 sub prepare {
     my ($self, $sql) = @_;
     
@@ -178,7 +169,6 @@ sub prepare {
     return $sth;
 }
 
-# Execute SQL directly
 sub do{
     my ($self, $sql, @bind_values) = @_;
     
@@ -202,7 +192,6 @@ sub do{
     return $affected;
 }
 
-# Create query
 sub create_query {
     my ($self, $template) = @_;
     my $class = ref $self;
@@ -250,7 +239,6 @@ sub create_query {
     return $query;
 }
 
-# Execute query
 sub query{
     my ($self, $query, $params)  = @_;
     $params ||= {};
@@ -300,7 +288,6 @@ sub query{
     return $affected;
 }
 
-# Build binding values
 sub _build_bind_values {
     my ($self, $query, $params) = @_;
     my $key_infos           = $query->key_infos;
@@ -411,7 +398,6 @@ sub _build_bind_values {
     return \@bind_values;
 }
 
-# Run transaction
 sub run_transaction {
     my ($self, $transaction) = @_;
     
@@ -462,14 +448,42 @@ sub run_transaction {
     }
 }
 
-# Get last insert id
 sub last_insert_id {
     my $self = shift;
     my $class = ref $self;
     croak "'$class' do not suppert 'last_insert_id'";
 }
 
-# Insert
+
+sub create_table {
+    my ($self, $table, @column_definitions) = @_;
+    
+    # Create table
+    my $sql = "create table $table (\n";
+    
+    # Column definitions
+    foreach my $column_definition (@column_definitions) {
+        $sql .= "\t$column_definition,\n";
+    }
+    $sql =~ s/,\n$//;
+    
+    # End
+    $sql .= "\n);";
+    
+    # Do query
+    return $self->do($sql);
+}
+
+sub drop_table {
+    my ($self, $table) = @_;
+    
+    # Drop table
+    my $sql = "drop table $table;";
+
+    # Do query
+    return $self->do($sql);
+}
+
 sub insert {
     my $self             = shift;
     my $table            = shift || '';
@@ -503,7 +517,6 @@ sub insert {
     return $ret_val;
 }
 
-# Update
 sub update {
     my $self             = shift;
     my $table            = shift || '';
@@ -563,7 +576,6 @@ sub update {
     return $ret_val;
 }
 
-# Update all rows
 sub update_all {
     my $self             = shift;
     my $table            = shift || '';
@@ -576,7 +588,6 @@ sub update_all {
                          $query_edit_cb, $options);
 }
 
-# Delete
 sub delete {
     my $self             = shift;
     my $table            = shift || '';
@@ -622,7 +633,6 @@ sub delete {
     return $ret_val;
 }
 
-# Delete all rows
 sub delete_all {
     my $self             = shift;
     my $table            = shift || '';
@@ -730,7 +740,6 @@ sub _query_cache_keys : ClassAttr { type => 'array',
                                     
 sub query_cache_max   : ClassAttr { auto_build => sub {shift->query_cache_max(50)} }
 
-# Add query cahce
 sub _add_query_cache {
     my ($class, $template, $query) = @_;
     my $query_cache_keys = $class->_query_cache_keys;
@@ -751,7 +760,6 @@ sub _add_query_cache {
     return $class;
 }
 
-# Both bind_filter and fetch_filter off
 sub filter_off {
     my $self = shift;
     
@@ -770,7 +778,7 @@ DBIx::Custom - Customizable DBI
 
 =head1 VERSION
 
-Version 0.0701
+Version 0.0801
 
 =head1 SYNOPSYS
     
@@ -1114,6 +1122,24 @@ Run transaction
 
 If transaction is success, commit is execute. 
 If tranzation is died, rollback is execute.
+
+=head2 create_table
+
+Create table
+
+    $dbi->create_table(
+        'books',
+        'name char(255)',
+        'age  int'
+    );
+
+First argument is table name. Rest arguments is column definition.
+
+=head2 drop_table
+
+Drop table
+
+    $dbi->drop_table('books');
 
 =head2 insert
 

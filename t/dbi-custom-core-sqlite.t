@@ -88,6 +88,23 @@ ok(defined $ret_val, "$test : auto connect");
 $ret_val = $dbi->do($DROP_TABLE->{0});
 ok(defined $ret_val, "$test : basic");
 
+test 'create_table';
+$dbi = DBIx::Custom->new($NEW_ARGS->{0});
+$ret_val = $dbi->create_table(
+                   'table1',
+                   'key1 char(255)',
+                   'key2 char(255)'
+                 );
+ok(defined $ret_val, "$test : create_table");
+
+eval{$dbi->insert('table1', {key1 => 1, key2 => 2})};
+ok(!$@, "$test : table exist");
+
+$ret_val = $dbi->drop_table('table1');
+ok(defined $ret_val, "$test : drop table");
+
+eval{$dbi->select('table1')};
+ok($@, "$test : table not exist");
 
 # Prepare table
 $dbi = DBIx::Custom->new($NEW_ARGS->{0});
