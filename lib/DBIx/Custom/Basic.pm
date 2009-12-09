@@ -8,12 +8,7 @@ use Encode qw/decode encode/;
 my $class = __PACKAGE__;
 
 $class->add_filter(
-    encode_utf8 => sub {
-        my $value = shift;
-        return $value unless defined $value;
-        utf8::upgrade($value) unless Encode::is_utf8($value);
-        return encode('UTF-8', $value);
-    },
+    encode_utf8 => sub { encode('UTF-8', shift) },
     decode_utf8 => sub { decode('UTF-8', shift) }
 );
 
