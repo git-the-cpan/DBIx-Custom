@@ -1,6 +1,6 @@
 ---
 name: DBIx-Custom
-version: 0.0901
+version: 0.0902
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 abstract: Customizable DBI
@@ -10,14 +10,14 @@ resources:
 requires:
   DBD::SQLite: 1.25
   DBI: 1.605
-  Object::Simple: 2.0702
+  Object::Simple: 2.1101
   Time::Piece: 1.15
 build_requires:
   Test::More: 0
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.0901
+    version: 0.0902
   DBIx::Custom::Basic:
     file: lib/DBIx/Custom/Basic.pm
   DBIx::Custom::MySQL:

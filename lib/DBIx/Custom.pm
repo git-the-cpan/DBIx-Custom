@@ -1,77 +1,43 @@
-use 5.008001;
-
 package DBIx::Custom;
-use Object::Simple;
+use base 'Object::Simple::Base';
 
-our $VERSION = '0.0901';
+use strict;
+use warnings;
+
+use 5.008001;
 
 use Carp 'croak';
 use DBI;
 use DBIx::Custom::Result;
 use DBIx::Custom::SQL::Template;
 
+my $p = __PACKAGE__;
 
-### Accessors
-sub user        : ClassObjectAttr { initialize => {clone => 'scalar'} }
-sub password    : ClassObjectAttr { initialize => {clone => 'scalar'} }
-sub data_source : ClassObjectAttr { initialize => {clone => 'scalar'} }
+$p->attr('dbh');
 
-sub options : ClassObjectAttr {
-    type       => 'hash',
-    initialize => {clone => 'hash', default => sub { {} }}
-}
+$p->class_attr(_query_caches     => (type => 'hash',  default => sub { {} }))
+  ->class_attr(_query_cache_keys => (type => 'array', default => sub { [] }))
+  ->class_attr(query_cache_max   => 50);
 
-sub database     : ClassObjectAttr { initialize => {clone => 'scalar'} }
-sub host         : ClassObjectAttr { initialize => {clone => 'scalar'} }
-sub port         : ClassObjectAttr { initialize => {clone => 'scalar'} }
+$p->hybrid_attr([qw/user password data_source
+                   database host port 
+                   bind_filter fetch_filter/] => (clone => 'scalar'));
 
-sub bind_filter  : ClassObjectAttr { initialize => {clone => 'scalar'} }
-sub fetch_filter : ClassObjectAttr { initialize => {clone => 'scalar'} }
+$p->hybrid_attr([qw/no_bind_filters no_fetch_filters/]
+            => (type => 'array', default => sub { [] }, clone => 'array'));
 
-sub no_bind_filters : ClassObjectAttr {
-    type       => 'array',
-    initialize => {clone => 'array', default => sub { [] }}
-}
+$p->hybrid_attr(options => (type  => 'hash', default => sub { {} },
+                            clone => 'hash'));
 
-sub no_fetch_filters : ClassObjectAttr {
-    type => 'array',
-    initialize => {clone => 'array', default => sub { [] }}
-}
+$p->hybrid_attr([qw/filters formats/]
+            => (type => 'hash', default => sub { {} },
+                deref => 1,     clone   => 'hash'));
 
-sub filters : ClassObjectAttr {
-    type => 'hash',
-    deref => 1,
-    initialize => {
-        clone   => 'hash',
-        default => sub { {} }
-    }
-}
+$p->hybrid_attr(result_class => (default => 'DBIx::Custom::Result',
+                                 clone   => 'scalar'));
 
-sub formats : ClassObjectAttr {
-    type => 'hash',
-    deref => 1,
-    initialize => {
-        clone   => 'hash',
-        default => sub { {} }
-    }
-}
-
-sub result_class : ClassObjectAttr {
-    initialize => {
-        clone   => 'scalar',
-        default => 'DBIx::Custom::Result'
-    }
-}
-
-sub sql_tmpl : ClassObjectAttr {
-    initialize => {
-        clone   => sub {$_[0] ? $_[0]->clone : undef},
-        default => sub {DBIx::Custom::SQL::Template->new}
-    }
-}
-
-sub dbh : Attr {}
-
+$p->hybrid_attr(sql_tmpl => (default => sub {DBIx::Custom::SQL::Template->new},
+                             clone => sub {$_[0] ? $_[0]->clone : undef}));
 
 ### Methods
 
@@ -732,14 +698,6 @@ sub select {
     return $result;
 }
 
-sub _query_caches     : ClassAttr { type => 'hash',
-                                    auto_build => sub {shift->_query_caches({}) } }
-                                    
-sub _query_cache_keys : ClassAttr { type => 'array',
-                                    auto_build => sub {shift->_query_cache_keys([])} }
-                                    
-sub query_cache_max   : ClassAttr { auto_build => sub {shift->query_cache_max(50)} }
-
 sub _add_query_cache {
     my ($class, $template, $query) = @_;
     my $query_cache_keys = $class->_query_cache_keys;
@@ -770,15 +728,17 @@ sub filter_off {
     return $self;
 }
 
-Object::Simple->build_class;
-
 =head1 NAME
 
 DBIx::Custom - Customizable DBI
 
 =head1 VERSION
 
-Version 0.0801
+Version 0.0902
+
+=cut
+
+our $VERSION = '0.0902';
 
 =head1 SYNOPSYS
     
