@@ -4,8 +4,6 @@ use base 'Object::Simple::Base';
 use strict;
 use warnings;
 
-use 5.008001;
-
 use Carp 'croak';
 use DBI;
 use DBIx::Custom::Result;
@@ -15,23 +13,23 @@ __PACKAGE__->attr('dbh');
 
 __PACKAGE__->class_attr(_query_caches     => sub { {} });
 __PACKAGE__->class_attr(_query_cache_keys => sub { [] });
-__PACKAGE__->class_attr('query_cache_max', default => 50, clone => 'scalar');
+__PACKAGE__->class_attr('query_cache_max', default => 50, inherit => 'scalar');
 
-__PACKAGE__->dual_attr([qw/user password data_source/], clone => 'scalar');
-__PACKAGE__->dual_attr([qw/database host port/],        clone => 'scalar');
-__PACKAGE__->dual_attr([qw/bind_filter fetch_filter/],  clone => 'scalar');
+__PACKAGE__->dual_attr([qw/user password data_source/], inherit => 'scalar');
+__PACKAGE__->dual_attr([qw/database host port/],        inherit => 'scalar');
+__PACKAGE__->dual_attr([qw/bind_filter fetch_filter/],  inherit => 'scalar');
 
 __PACKAGE__->dual_attr([qw/no_bind_filters no_fetch_filters/],
-                       default => sub { [] }, clone => 'array');
+                       default => sub { [] }, inherit => 'array');
 
 __PACKAGE__->dual_attr([qw/options filters formats/],
-                       default => sub { {} }, clone => 'hash');
+                       default => sub { {} }, inherit => 'hash');
 
 __PACKAGE__->dual_attr('result_class', default => 'DBIx::Custom::Result',
-                                       clone   => 'scalar');
+                                       inherit   => 'scalar');
 
 __PACKAGE__->dual_attr('sql_tmpl', default => sub {DBIx::Custom::SQL::Template->new},
-                                   clone   => sub {$_[0] ? $_[0]->clone : undef});
+                                   inherit   => sub {$_[0] ? $_[0]->clone : undef});
 
 sub add_filter {
     my $invocant = shift;
@@ -250,7 +248,7 @@ sub _build_bind_values {
     my ($self, $query, $params) = @_;
     my $key_infos           = $query->key_infos;
     my $bind_filter         = $query->bind_filter;
-    my $no_bind_filters_map = $query->_no_bind_filters_map || {};
+    my $no_bind_filters     = $query->_no_bind_filters || {};
     
     # binding values
     my @bind_values;
@@ -284,7 +282,7 @@ sub _build_bind_values {
                     if (ref $current_key eq 'ARRAY') {
                         # Filtering 
                         if ($bind_filter &&
-                            !$no_bind_filters_map->{$original_key})
+                            !$no_bind_filters->{$original_key})
                         {
                             push @bind_values, 
                                  $bind_filter->($root_params->[$current_key->[0]], 
@@ -305,7 +303,7 @@ sub _build_bind_values {
                         
                         # Filtering
                         if ($bind_filter &&
-                            !$no_bind_filters_map->{$original_key}) 
+                            !$no_bind_filters->{$original_key}) 
                         {
                             push @bind_values,
                                  $bind_filter->($root_params->{$current_key},
@@ -726,11 +724,11 @@ DBIx::Custom - Customizable DBI
 
 =head1 VERSION
 
-Version 0.0903
+Version 0.0904
 
 =cut
 
-our $VERSION = '0.0903';
+our $VERSION = '0.0904';
 
 =head1 SYNOPSYS
     
