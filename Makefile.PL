@@ -8,7 +8,7 @@ WriteMakefile
           'VERSION_FROM' => 'lib/DBIx/Custom.pm',
           'PREREQ_PM' => {
                            'Test::More' => 0,
-                           'Object::Simple' => '3.0101',
+                           'Object::Simple' => '3.0201',
                            'DBD::SQLite' => '1.25',
                            'Time::Piece' => '1.15',
                            'DBI' => '1.605'
