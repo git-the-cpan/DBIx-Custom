@@ -5,9 +5,9 @@ lib/DBIx/Custom/Basic.pm
 lib/DBIx/Custom/MySQL.pm
 lib/DBIx/Custom/Query.pm
 lib/DBIx/Custom/Result.pm
-lib/DBIx/Custom/SQL/Template.pm
 lib/DBIx/Custom/SQLite.pm
-lib/DBIx/Custom/Transaction.pm
+lib/DBIx/Custom/SQLTemplate.pm
+lib/DBIx/Custom/SQLTemplate/TagProcessor.pm
 Makefile.PL
 MANIFEST			This list of files
 META.yml

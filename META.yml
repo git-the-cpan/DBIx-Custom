@@ -1,9 +1,9 @@
 ---
 name: DBIx-Custom
-version: 0.1101
+version: 0.1301
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
-abstract: Customizable DBI
+abstract: DBI with hash bind and filtering system
 license: perl
 resources:
   license: ~
@@ -17,7 +17,7 @@ build_requires:
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.1101
+    version: 0.1301
   DBIx::Custom::Basic:
     file: lib/DBIx/Custom/Basic.pm
   DBIx::Custom::MySQL:
@@ -26,14 +26,12 @@ provides:
     file: lib/DBIx/Custom/Query.pm
   DBIx::Custom::Result:
     file: lib/DBIx/Custom/Result.pm
-  DBIx::Custom::SQL::Template:
-    file: lib/DBIx/Custom/SQL/Template.pm
-  DBIx::Custom::SQL::Template::TagProcessors:
-    file: lib/DBIx/Custom/SQL/Template.pm
+  DBIx::Custom::SQLTemplate:
+    file: lib/DBIx/Custom/SQLTemplate.pm
+  DBIx::Custom::SQLTemplate::TagProcessors:
+    file: lib/DBIx/Custom/SQLTemplate/TagProcessor.pm
   DBIx::Custom::SQLite:
     file: lib/DBIx/Custom/SQLite.pm
-  DBIx::Custom::Transaction:
-    file: lib/DBIx/Custom/Transaction.pm
 generated_by: Module::Build version 0.31012
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

@@ -1,11 +1,13 @@
-package DBIx::Custom::SQL::Template;
+package DBIx::Custom::SQLTemplate;
 
 use strict;
 use warnings;
 
 use base 'Object::Simple';
+
 use Carp 'croak';
 use DBIx::Custom::Query;
+use DBIx::Custom::SQLTemplate::TagProcessor;
 
 __PACKAGE__->dual_attr('tag_processors', default => sub { {} },
                                          inherit => 'hash_copy');
@@ -15,18 +17,18 @@ __PACKAGE__->dual_attr('tag_end',   default => '}', inherit => 'scalar_copy');
 
 __PACKAGE__->dual_attr('tag_syntax', inherit => 'scalar_copy');
 
-__PACKAGE__->add_tag_processor(
-    '?'      => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    '='      => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    '<>'     => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    '>'      => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    '<'      => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    '>='     => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    '<='     => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    'like'   => \&DBIx::Custom::SQL::Template::TagProcessors::expand_basic_tag,
-    'in'     => \&DBIx::Custom::SQL::Template::TagProcessors::expand_in_tag,
-    'insert' => \&DBIx::Custom::SQL::Template::TagProcessors::expand_insert_tag,
-    'update' => \&DBIx::Custom::SQL::Template::TagProcessors::expand_update_tag
+__PACKAGE__->resist_tag_processor(
+    '?'      => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_placeholder_tag,
+    '='      => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    '<>'     => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    '>'      => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    '<'      => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    '>='     => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    '<='     => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    'like'   => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_basic_tag,
+    'in'     => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_in_tag,
+    'insert' => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_insert_tag,
+    'update' => \&DBIx::Custom::SQLTemplate::TagProcessors::expand_update_tag
 );
 
 __PACKAGE__->tag_syntax(<< 'EOS');
@@ -48,7 +50,7 @@ __PACKAGE__->tag_syntax(<< 'EOS');
 EOS
 
 
-sub add_tag_processor {
+sub resist_tag_processor {
     my $invocant = shift;
     my $tag_processors = ref $_[0] eq 'HASH' ? $_[0] : {@_};
     $invocant->tag_processors({%{$invocant->tag_processors}, %{$tag_processors}});
@@ -81,6 +83,10 @@ sub create_query {
 
 sub _parse_template {
     my ($self, $template) = @_;
+    
+    if (ref $template eq 'ARRAY') {
+        $template = $template->[1];
+    }
     $template ||= '';
     
     my $tree = [];
@@ -142,7 +148,7 @@ sub _build_query {
     my $sql = '';
     
     # All parameter key infomation
-    my $all_key_infos = [];
+    my $all_columns = [];
     
     # Build SQL 
     foreach my $node (@$tree) {
@@ -169,20 +175,19 @@ sub _build_query {
               unless ref $tag_processor eq 'CODE';
             
             # Expand tag using tag processor
-            my ($expand, $key_infos)
-              = $tag_processor->($tag_name, $tag_args);
+            my ($expand, $columns) = $tag_processor->($tag_name, $tag_args);
             
             # Check tag processor return value
-            croak("Tag processor '$tag_name' must return (\$expand, \$key_infos)")
-              if !defined $expand || ref $key_infos ne 'ARRAY';
+            croak("Tag processor '$tag_name' must return (\$expand, \$columns)")
+              if !defined $expand || ref $columns ne 'ARRAY';
             
             # Check placeholder count
             croak("Placeholder count in SQL created by tag processor '$tag_name' " .
                   "must be same as key informations count")
-              unless $self->_placeholder_count($expand) eq @$key_infos;
+              unless $self->_placeholder_count($expand) eq @$columns;
             
             # Add key information
-            push @$all_key_infos, @$key_infos;
+            push @$all_columns, @$columns;
             
             # Join expand tag to SQL
             $sql .= $expand;
@@ -193,7 +198,7 @@ sub _build_query {
     $sql .= ';' unless $sql =~ /;$/;
     
     # Query
-    my $query = DBIx::Custom::Query->new(sql => $sql, key_infos => $all_key_infos);
+    my $query = DBIx::Custom::Query->new(sql => $sql, columns => $all_columns);
     
     return $query;
 }
@@ -212,252 +217,13 @@ sub _placeholder_count {
 
 1;
 
-package DBIx::Custom::SQL::Template::TagProcessors;
-
-use strict;
-use warnings;
-use Carp 'croak';
-
-# Expand tag '?', '=', '<>', '>', '<', '>=', '<=', 'like'
-sub expand_basic_tag {
-    my ($tag_name, $tag_args) = @_;
-    my $original_key = $tag_args->[0];
-    
-    # Key is not exist
-    croak("You must be pass key as argument to tag '{$tag_name }'")
-      if !$original_key;
-    
-    # Expanded tag
-    my $expand = $tag_name eq '?'
-               ? '?'
-               : "$original_key $tag_name ?";
-    
-    # Get table and clumn name
-    my ($table, $column) = get_table_and_column($original_key);
-    
-    # Parameter key infomation
-    my $key_info = {};
-    
-    # Original key
-    $key_info->{original_key} = $original_key;
-    
-    # Table
-    $key_info->{table}  = $table;
-    
-    # Column name
-    $key_info->{column} = $column;
-    
-    # Access keys
-    my $access_keys = [];
-    push @$access_keys, [$original_key];
-    push @$access_keys, [$table, $column] if $table && $column;
-    $key_info->{access_keys} = $access_keys;
-    
-    # Add parameter key information
-    my $key_infos = [];
-    push @$key_infos, $key_info;
-    
-    return ($expand, $key_infos);
-}
-
-# Expand tag 'in'
-sub expand_in_tag {
-    my ($tag_name, $tag_args) = @_;
-    my ($original_key, $placeholder_count) = @$tag_args;
-    
-    # Key must be specified
-    croak("You must be pass key as first argument of tag '{$tag_name }'\n" . 
-          "Usage: {$tag_name \$key \$placeholder_count}")
-      unless $original_key;
-      
-    
-    # Place holder count must be specified
-    croak("You must be pass placeholder count as second argument of tag '{$tag_name }'\n" . 
-          "Usage: {$tag_name \$key \$placeholder_count}")
-      if !$placeholder_count || $placeholder_count =~ /\D/;
-
-    # Expand tag
-    my $expand = "$original_key $tag_name (";
-    for (my $i = 0; $i < $placeholder_count; $i++) {
-        $expand .= '?, ';
-    }
-    
-    $expand =~ s/, $//;
-    $expand .= ')';
-    
-    # Get table and clumn name
-    my ($table, $column) = get_table_and_column($original_key);
-    
-    # Create parameter key infomations
-    my $key_infos = [];
-    for (my $i = 0; $i < $placeholder_count; $i++) {
-        # Parameter key infomation
-        my $key_info = {};
-        
-        # Original key
-        $key_info->{original_key} = $original_key;
-        
-        # Table
-        $key_info->{table}   = $table;
-        
-        # Column name
-        $key_info->{column}  = $column;
-        
-        # Access keys
-        my $access_keys = [];
-        push @$access_keys, [$original_key, [$i]];
-        push @$access_keys, [$table, $column, [$i]] if $table && $column;
-        $key_info->{access_keys} = $access_keys;
-        
-        # Add parameter key infos
-        push @$key_infos, $key_info;
-    }
-    
-    return ($expand, $key_infos);
-}
-
-# Get table and column
-sub get_table_and_column {
-    my $key = shift;
-    $key ||= '';
-    
-    return ('', $key) unless $key =~ /\./;
-    
-    my ($table, $column) = split /\./, $key;
-    
-    return ($table, $column);
-}
-
-# Expand tag 'insert'
-sub expand_insert_tag {
-    my ($tag_name, $tag_args) = @_;
-    my $original_keys = $tag_args;
-    
-    # Insert key (k1, k2, k3, ..)
-    my $insert_keys = '(';
-    
-    # placeholder (?, ?, ?, ..)
-    my $place_holders = '(';
-    
-    foreach my $original_key (@$original_keys) {
-        # Get table and column
-        my ($table, $column) = get_table_and_column($original_key);
-        
-        # Join insert column
-        $insert_keys   .= "$column, ";
-        
-        # Join place holder
-        $place_holders .= "?, ";
-    }
-    
-    # Delete last ', '
-    $insert_keys =~ s/, $//;
-    
-    # Close 
-    $insert_keys .= ')';
-    $place_holders =~ s/, $//;
-    $place_holders .= ')';
-    
-    # Expand tag
-    my $expand = "$insert_keys values $place_holders";
-    
-    # Create parameter key infomations
-    my $key_infos = [];
-    foreach my $original_key (@$original_keys) {
-        # Get table and clumn name
-        my ($table, $column) = get_table_and_column($original_key);
-        
-        # Parameter key infomation
-        my $key_info = {};
-        
-        # Original key
-        $key_info->{original_key} = $original_key;
-        
-        # Table
-        $key_info->{table}   = $table;
-        
-        # Column name
-        $key_info->{column}  = $column;
-        
-        # Access keys
-        my $access_keys = [];
-        push @$access_keys, ['#insert', $original_key];
-        push @$access_keys, ['#insert', $table, $column] if $table && $column;
-        push @$access_keys, [$original_key];
-        push @$access_keys, [$table, $column] if $table && $column;
-        $key_info->{access_keys} = $access_keys;
-        
-        # Add parameter key infos
-        push @$key_infos, $key_info;
-    }
-    
-    return ($expand, $key_infos);
-}
-
-# Expand tag 'update'
-sub expand_update_tag {
-    my ($tag_name, $tag_args) = @_;
-    my $original_keys = $tag_args;
-    
-    # Expanded tag
-    my $expand = 'set ';
-    
-    # 
-    foreach my $original_key (@$original_keys) {
-        # Get table and clumn name
-        my ($table, $column) = get_table_and_column($original_key);
-
-        # Join key and placeholder
-        $expand .= "$column = ?, ";
-    }
-    
-    # Delete last ', '
-    $expand =~ s/, $//;
-    
-    # Create parameter key infomations
-    my $key_infos = [];
-    foreach my $original_key (@$original_keys) {
-        # Get table and clumn name
-        my ($table, $column) = get_table_and_column($original_key);
-        
-        # Parameter key infomation
-        my $key_info = {};
-        
-        # Original key
-        $key_info->{original_key} = $original_key;
-        
-        # Table
-        $key_info->{table}  = $table;
-        
-        # Column name
-        $key_info->{column} = $column;
-        
-        # Access keys
-        my $access_keys = [];
-        push @$access_keys, ['#update', $original_key];
-        push @$access_keys, ['#update', $table, $column] if $table && $column;
-        push @$access_keys, [$original_key];
-        push @$access_keys, [$table, $column] if $table && $column;
-        $key_info->{access_keys} = $access_keys;
-        
-        # Add parameter key infos
-        push @$key_infos, $key_info;
-    }
-    
-    return ($expand, $key_infos);
-}
-
-package DBIx::Custom::SQL::Template;
-
-1;
-
 =head1 NAME
 
-DBIx::Custom::SQL::Template - DBIx::Custom SQL Template
+DBIx::Custom::SQLTemplate - DBIx::Custom SQL Template
 
 =head1 SYNOPSIS
     
-    my $sql_tmpl = DBIx::Custom::SQL::Template->new;
+    my $sql_tmpl = DBIx::Custom::SQLTemplate->new;
     
     my $tmpl   = "select from table {= k1} && {<> k2} || {like k3}";
     my $param = {k1 => 1, k2 => 2, k3 => 3};
@@ -527,15 +293,15 @@ query has two infomation
     1. sql       : SQL
     2. key_infos : Parameter access key information
 
-=head2 add_tag_processor
+=head2 resist_tag_processor
 
 Add tag processor
     
-    $sql_tmpl = $sql_tmpl->add_tag_processor($tag_processor);
+    $sql_tmpl = $sql_tmpl->resist_tag_processor($tag_processor);
 
-The following is add_tag_processor sample
+The following is resist_tag_processor sample
 
-    $sql_tmpl->add_tag_processor(
+    $sql_tmpl->resist_tag_processor(
         '?' => sub {
             my ($tag_name, $tag_args) = @_;
             
@@ -565,11 +331,11 @@ You must be return expanded tag and key infomations.
 
 Key information is a little complex. so I will explan this in future.
 
-If you want to know more, Please see DBIx::Custom::SQL::Template source code.
+If you want to know more, Please see DBIx::Custom::SQLTemplate source code.
 
 =head2 clone
 
-Clone DBIx::Custom::SQL::Template object
+Clone DBIx::Custom::SQLTemplate object
 
     $clone = $sql_tmpl->clone;
     
@@ -613,3 +379,4 @@ The following is update SQL sample
     $query->sql : "update table set key1 = ?, key2 = ? where key3 = ?;"
     
 =cut
+

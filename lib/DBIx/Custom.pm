@@ -4,11 +4,12 @@ use strict;
 use warnings;
 
 use base 'Object::Simple';
+
 use Carp 'croak';
 use DBI;
 use DBIx::Custom::Result;
-use DBIx::Custom::SQL::Template;
-use DBIx::Custom::Transaction;
+use DBIx::Custom::SQLTemplate;
+use DBIx::Custom::Query;
 
 __PACKAGE__->attr('dbh');
 
@@ -18,23 +19,17 @@ __PACKAGE__->class_attr(_query_cache_keys => sub { [] });
 __PACKAGE__->class_attr('query_cache_max', default => 50,
                                            inherit => 'scalar_copy');
 
-__PACKAGE__->dual_attr([qw/user password data_source/], inherit => 'scalar_copy');
-__PACKAGE__->dual_attr([qw/database host port/],        inherit => 'scalar_copy');
-__PACKAGE__->dual_attr([qw/bind_filter fetch_filter/],  inherit => 'scalar_copy');
+__PACKAGE__->attr([qw/user password data_source/]);
+__PACKAGE__->attr([qw/database host port/]);
+__PACKAGE__->attr([qw/default_query_filter default_fetch_filter options/]);
 
-__PACKAGE__->dual_attr([qw/no_bind_filters no_fetch_filters/],
-                       default => sub { [] }, inherit => 'array_copy');
-
-__PACKAGE__->dual_attr([qw/options filters formats/],
+__PACKAGE__->dual_attr([qw/ filters formats/],
                        default => sub { {} }, inherit => 'hash_copy');
 
-__PACKAGE__->dual_attr('result_class', default => 'DBIx::Custom::Result',
-                                       inherit => 'scalar_copy');
+__PACKAGE__->attr(result_class => 'DBIx::Custom::Result');
+__PACKAGE__->attr(sql_tmpl => sub { DBIx::Custom::SQLTemplate->new });
 
-__PACKAGE__->dual_attr('sql_tmpl', default => sub {DBIx::Custom::SQL::Template->new},
-                                   inherit   => sub {$_[0] ? $_[0]->clone : undef});
-
-sub add_filter {
+sub resist_filter {
     my $invocant = shift;
     
     # Add filter
@@ -44,7 +39,7 @@ sub add_filter {
     return $invocant;
 }
 
-sub add_format{
+sub resist_format{
     my $invocant = shift;
     
     # Add format
@@ -133,105 +128,69 @@ sub reconnect {
     return $self;
 }
 
-sub prepare {
-    my ($self, $sql) = @_;
-    
-    # Connect if not
-    $self->connect unless $self->connected;
-    
-    # Prepare
-    my $sth = eval{$self->dbh->prepare($sql)};
-    
-    # Error
-    croak("$@<Your SQL>\n$sql") if $@;
-    
-    return $sth;
-}
-
-sub do{
-    my ($self, $sql, @bind_values) = @_;
-    
-    # Connect if not
-    $self->connect unless $self->connected;
-    
-    # Do
-    my $affected = eval{$self->dbh->do($sql, @bind_values)};
-    
-    # Error
-    if ($@) {
-        my $error = $@;
-        require Data::Dumper;
-        
-        my $bind_value_dump
-          = Data::Dumper->Dump([\@bind_values], ['*bind_valuds']);
-        
-        croak("$error<Your SQL>\n$sql\n<Your bind values>\n$bind_value_dump\n");
-    }
-    
-    return $affected;
-}
-
 sub create_query {
     my ($self, $template) = @_;
+    
     my $class = ref $self;
+    
+    if (ref $template eq 'ARRAY') {
+        $template = $template->[1];
+    }
     
     # Create query from SQL template
     my $sql_tmpl = $self->sql_tmpl;
     
     # Try to get cached query
-    my $cached_query = $class->_query_caches->{$template};
+    my $cached_query = $class->_query_caches->{"$template"};
     
     # Create query
     my $query;
-    if ($query) {
-        $query = $self->new(sql       => $cached_query->sql, 
-                            key_infos => $cached_query->key_infos);
+    if ($cached_query) {
+        $query = DBIx::Custom::Query->new(
+            sql       => $cached_query->sql,
+            columns => $cached_query->columns
+        );
     }
     else {
         $query = eval{$sql_tmpl->create_query($template)};
         croak($@) if $@;
         
-        $class->_add_query_cache($template, $query);
+        $class->_add_query_cache("$template", $query);
     }
     
     # Connect if not
     $self->connect unless $self->connected;
     
     # Prepare statement handle
-    my $sth = $self->prepare($query->{sql});
+    my $sth = $self->dbh->prepare($query->{sql});
     
     # Set statement handle
     $query->sth($sth);
     
-    # Set bind filter
-    $query->bind_filter($self->bind_filter);
-    
-    # Set no filter keys when binding
-    $query->no_bind_filters($self->no_bind_filters);
-    
-    # Set fetch filter
-    $query->fetch_filter($self->fetch_filter);
-    
-    # Set no filter keys when fetching
-    $query->no_fetch_filters($self->no_fetch_filters);
-    
     return $query;
 }
 
-sub query{
-    my ($self, $query, $params)  = @_;
+sub execute{
+    my ($self, $query, $params, $args)  = @_;
     $params ||= {};
     
     # First argument is SQL template
-    if (!ref $query) {
-        my $template = $query;
+    unless (ref $query eq 'DBIx::Custom::Query') {
+        my $template;
+        
+        if (ref $query eq 'ARRAY') {
+            $template = $query->[0];
+        }
+        else { $template = $query }
+        
         $query = $self->create_query($template);
-        my $query_edit_cb = $_[3];
-        $query_edit_cb->($query) if ref $query_edit_cb eq 'CODE';
     }
-    
+
+    # Filter
+    my $filter = $args->{filter} || $query->filter || {};
+
     # Create bind value
-    my $bind_values = $self->_build_bind_values($query, $params);
+    my $bind_values = $self->_build_bind_values($query, $params, $filter);
     
     # Execute
     my $sth      = $query->sth;
@@ -241,7 +200,6 @@ sub query{
     if (my $execute_error = $@) {
         require Data::Dumper;
         my $sql              = $query->{sql} || '';
-        my $key_infos_dump   = Data::Dumper->Dump([$query->key_infos], ['*key_infos']);
         my $params_dump      = Data::Dumper->Dump([$params], ['*params']);
         
         croak("$execute_error" . 
@@ -257,10 +215,9 @@ sub query{
         
         # Create result
         my $result = $result_class->new({
-            _dbi             => $self,
-            sth              => $sth,
-            fetch_filter     => $query->fetch_filter,
-            no_fetch_filters => $query->no_fetch_filters
+            sth             => $sth,
+            default_filter  => $self->default_fetch_filter,
+            filters         => $self->filters
         });
         return $result;
     }
@@ -268,116 +225,90 @@ sub query{
 }
 
 sub _build_bind_values {
-    my ($self, $query, $params) = @_;
-    my $key_infos           = $query->key_infos;
-    my $bind_filter         = $query->bind_filter;
-    my $no_bind_filters     = $query->_no_bind_filters || {};
+    my ($self, $query, $params, $filter) = @_;
     
     # binding values
     my @bind_values;
     
-    # Create bind values
-    KEY_INFOS :
-    foreach my $key_info (@$key_infos) {
-        # Set variable
-        my $access_keys  = $key_info->{access_keys};
-        my $original_key = $key_info->{original_key} || '';
-        my $table        = $key_info->{table}        || '';
-        my $column       = $key_info->{column}       || '';
+    # Build bind values
+    my $count = {};
+    foreach my $column (@{$query->columns}) {
         
-        # Key is found?
-        my $found;
+        # Value
+        my $value = ref $params->{$column}
+                  ? $params->{$column}->[$count->{$column} || 0]
+                  : $params->{$column};
         
-        # Build bind values
-        ACCESS_KEYS :
-        foreach my $access_key (@$access_keys) {
-            # Root parameter
-            my $root_params = $params;
-            
-            # Search corresponding value
-            for (my $i = 0; $i < @$access_key; $i++) {
-                # Current key
-                my $current_key = $access_key->[$i];
-                
-                # Last key
-                if ($i == @$access_key - 1) {
-                    # Key is array reference
-                    if (ref $current_key eq 'ARRAY') {
-                        # Filtering 
-                        if ($bind_filter &&
-                            !$no_bind_filters->{$original_key})
-                        {
-                            push @bind_values, 
-                                 $bind_filter->($root_params->[$current_key->[0]], 
-                                                $original_key, $self,
-                                                {table => $table, column => $column});
-                        }
-                        # Not filtering
-                        else {
-                            push @bind_values,
-                                 scalar $root_params->[$current_key->[0]];
-                        }
-                    }
-                    # Key is string
-                    else {
-                        # Key is not found
-                        next ACCESS_KEYS
-                          unless exists $root_params->{$current_key};
-                        
-                        # Filtering
-                        if ($bind_filter &&
-                            !$no_bind_filters->{$original_key}) 
-                        {
-                            push @bind_values,
-                                 $bind_filter->($root_params->{$current_key},
-                                                $original_key, $self,
-                                                {table => $table, column => $column});
-                        }
-                        # Not filtering
-                        else {
-                            push @bind_values,
-                                 scalar $root_params->{$current_key};
-                        }
-                    }
-                    
-                    # Key is found
-                    $found = 1;
-                    next KEY_INFOS;
-                }
-                # First or middle key
-                else {
-                    # Key is array reference
-                    if (ref $current_key eq 'ARRAY') {
-                        # Go next key
-                        $root_params = $root_params->[$current_key->[0]];
-                    }
-                    # Key is string
-                    else {
-                        # Not found
-                        next ACCESS_KEYS
-                          unless exists $root_params->{$current_key};
-                        
-                        # Go next key
-                        $root_params = $root_params->{$current_key};
-                    }
-                }
-            }
-        }
+        # Filter
+        $filter ||= {};
         
-        # Key is not found
-        unless ($found) {
-            require Data::Dumper;
-            my $key_info_dump  = Data::Dumper->Dump([$key_info], ['*key_info']);
-            my $params_dump    = Data::Dumper->Dump([$params], ['*params']);
-            croak("Corresponding key is not found in your parameters\n" . 
-                  "<Key information>\n$key_info_dump\n\n" .
-                  "<Your parameters>\n$params_dump\n");
-        }
+        # Filter name
+        my $fname = $filter->{$column} || $self->default_query_filter || '';
+        
+        my $filters = $self->filters;
+        push @bind_values, $filters->{$fname}
+                         ? $filters->{$fname}->($value)
+                         : $value;
+        
+        # Count up 
+        $count->{$column}++;
     }
+    
     return \@bind_values;
 }
 
-sub transaction { DBIx::Custom::Transaction->new(dbi => shift) }
+sub run_transaction {
+    my ($self, $transaction) = @_;
+    
+    # Shorcut
+    return unless $self;
+    
+    # Check auto commit
+    croak("AutoCommit must be true before transaction start")
+      unless $self->_auto_commit;
+    
+    # Auto commit off
+    $self->_auto_commit(0);
+    
+    # Run transaction
+    eval {$transaction->()};
+    
+    # Tranzaction error
+    my $transaction_error = $@;
+    
+    # Tranzaction is failed.
+    if ($transaction_error) {
+        # Rollback
+        eval{$self->dbh->rollback};
+        
+        # Rollback error
+        my $rollback_error = $@;
+        
+        # Auto commit on
+        $self->_auto_commit(1);
+        
+        if ($rollback_error) {
+            # Rollback is failed
+            croak("${transaction_error}Rollback is failed : $rollback_error");
+        }
+        else {
+            # Rollback is success
+            croak("${transaction_error}Rollback is success");
+        }
+    }
+    # Tranzaction is success
+    else {
+        # Commit
+        eval{$self->dbh->commit};
+        my $commit_error = $@;
+        
+        # Auto commit on
+        $self->_auto_commit(1);
+        
+        # Commit is failed
+        croak($commit_error) if $commit_error;
+    }
+}
 
 sub create_table {
     my ($self, $table, @column_definitions) = @_;
@@ -394,8 +325,11 @@ sub create_table {
     # End
     $sql .= ");";
     
+    # Connect
+    $self->connect unless $self->connected;
+    
     # Do query
-    return $self->do($sql);
+    return $self->dbh->do($sql);
 }
 
 sub drop_table {
@@ -404,16 +338,35 @@ sub drop_table {
     # Drop table
     my $sql = "drop table $table;";
 
+    # Connect
+    $self->connect unless $self->connected;
+
     # Do query
-    return $self->do($sql);
+    return $self->dbh->do($sql);
 }
 
+our %VALID_INSERT_ARGS = map { $_ => 1 } qw/append filter/;
+
 sub insert {
-    my $self             = shift;
-    my $table            = shift || '';
-    my $insert_params    = shift || {};
-    my $append_statement = shift unless ref $_[0];
-    my $query_edit_cb    = shift;
+    my ($self, $table, $insert_params, $args) = @_;
+    
+    # Table
+    $table ||= '';
+    
+    # Insert params
+    $insert_params ||= {};
+    
+    # Arguments
+    $args ||= {};
+    
+    # Check arguments
+    foreach my $name (keys %$args) {
+        croak "\"$name\" is invalid name"
+          unless $VALID_INSERT_ARGS{$name};
+    }
+    
+    my $append_statement = $args->{append} || '';
+    my $filter           = $args->{filter};
     
     # Insert keys
     my @insert_keys = keys %$insert_params;
@@ -425,33 +378,33 @@ sub insert {
     # Templte for insert
     my $template = "insert into $table {insert " . join(' ', @insert_keys) . '}';
     $template .= " $append_statement" if $append_statement;
-    # Create query
-    my $query = $self->create_query($template);
-    
-    # Query edit callback must be code reference
-    croak("Query edit callback must be code reference")
-      if $query_edit_cb && ref $query_edit_cb ne 'CODE';
-    
-    # Query edit if need
-    $query_edit_cb->($query) if $query_edit_cb;
     
     # Execute query
-    my $ret_val = $self->query($query, $insert_params);
+    my $ret_val = $self->execute($template, $insert_params, {filter => $filter});
     
     return $ret_val;
 }
 
+our %VALID_UPDATE_ARGS
+  = map { $_ => 1 } qw/where append filter allow_update_all/;
+
 sub update {
-    my $self             = shift;
-    my $table            = shift || '';
-    my $update_params    = shift || {};
-    my $where_params     = shift || {};
-    my $append_statement = shift unless ref $_[0];
-    my $query_edit_cb    = shift;
-    my $options          = shift;
+    my ($self, $table, $params, $args) = @_;
+    
+    # Check arguments
+    foreach my $name (keys %$args) {
+        croak "\"$name\" is invalid name"
+          unless $VALID_UPDATE_ARGS{$name};
+    }
+    
+    # Arguments
+    my $where_params     = $args->{where} || {};
+    my $append_statement = $args->{append} || '';
+    my $filter           = $args->{filter};
+    my $allow_update_all = $args->{allow_update_all};
     
     # Update keys
-    my @update_keys = keys %$update_params;
+    my @update_keys = keys %$params;
     
     # Not exists update kyes
     croak("Key-value pairs for update must be specified to 'update' second argument")
@@ -462,16 +415,19 @@ sub update {
     
     # Not exists where keys
     croak("Key-value pairs for where clause must be specified to 'update' third argument")
-      if !@where_keys && !$options->{allow_update_all};
+      if !@where_keys && !$allow_update_all;
     
     # Update clause
     my $update_clause = '{update ' . join(' ', @update_keys) . '}';
     
     # Where clause
     my $where_clause = '';
+    my $new_where = {};
+    
     if (@where_keys) {
         $where_clause = 'where ';
         foreach my $where_key (@where_keys) {
+            
             $where_clause .= "{= $where_key} and ";
         }
         $where_clause =~ s/ and $//;
@@ -481,52 +437,64 @@ sub update {
     my $template = "update $table $update_clause $where_clause";
     $template .= " $append_statement" if $append_statement;
     
-    # Create query
-    my $query = $self->create_query($template);
-    
-    # Query edit callback must be code reference
-    croak("Query edit callback must be code reference")
-      if $query_edit_cb && ref $query_edit_cb ne 'CODE';
-    
-    # Query edit if need
-    $query_edit_cb->($query) if $query_edit_cb;
-    
     # Rearrange parammeters
-    my $params = {'#update' => $update_params, %$where_params};
+    foreach my $where_key (@where_keys) {
+        
+        if (exists $params->{$where_key}) {
+            $params->{$where_key} = [$params->{$where_key}]
+              unless ref $params->{$where_key} eq 'ARRAY';
+            
+            push @{$params->{$where_key}}, $where_params->{$where_key};
+        }
+        else {
+            $params->{$where_key} = $where_params->{$where_key};
+        }
+    }
     
     # Execute query
-    my $ret_val = $self->query($query, $params);
+    my $ret_val = $self->execute($template, $params, {filter => $filter});
     
     return $ret_val;
 }
 
 sub update_all {
-    my $self             = shift;
-    my $table            = shift || '';
-    my $update_params    = shift || {};
-    my $append_statement = shift unless ref $_[0];
-    my $query_edit_cb    = shift;
-    my $options          = {allow_update_all => 1};
+    my ($self, $table, $update_params, $args) = @_;
+    
+    # Allow all update
+    $args ||= {};
+    $args->{allow_update_all} = 1;
     
     # Update all rows
-    return $self->update($table, $update_params, {}, $append_statement,
-                         $query_edit_cb, $options);
+    return $self->update($table, $update_params, $args);
 }
 
+our %VALID_DELETE_ARGS
+  = map { $_ => 1 } qw/where append filter allow_delete_all/;
+
 sub delete {
-    my $self             = shift;
-    my $table            = shift || '';
-    my $where_params     = shift || {};
-    my $append_statement = shift unless ref $_[0];
-    my $query_edit_cb    = shift;
-    my $options          = shift;
+    my ($self, $table, $args) = @_;
+    
+    # Table
+    $table            ||= '';
+
+    # Check arguments
+    foreach my $name (keys %$args) {
+        croak "\"$name\" is invalid name"
+          unless $VALID_DELETE_ARGS{$name};
+    }
+    
+    # Arguments
+    my $where_params     = $args->{where} || {};
+    my $append_statement = $args->{append};
+    my $filter    = $args->{filter};
+    my $allow_delete_all = $args->{allow_delete_all};
     
     # Where keys
     my @where_keys = keys %$where_params;
     
     # Not exists where keys
     croak("Key-value pairs for where clause must be specified to 'delete' second argument")
-      if !@where_keys && !$options->{allow_delete_all};
+      if !@where_keys && !$allow_delete_all;
     
     # Where clause
     my $where_clause = '';
@@ -542,63 +510,44 @@ sub delete {
     my $template = "delete from $table $where_clause";
     $template .= " $append_statement" if $append_statement;
     
-    # Create query
-    my $query = $self->create_query($template);
-    
-    # Query edit callback must be code reference
-    croak("Query edit callback must be code reference")
-      if $query_edit_cb && ref $query_edit_cb ne 'CODE';
-    
-    # Query edit if need
-    $query_edit_cb->($query) if $query_edit_cb;
-    
     # Execute query
-    my $ret_val = $self->query($query, $where_params);
+    my $ret_val = $self->execute($template, $where_params, {filter => $filter});
     
     return $ret_val;
 }
 
 sub delete_all {
-    my $self             = shift;
-    my $table            = shift || '';
-    my $append_statement = shift unless ref $_[0];
-    my $query_edit_cb    = shift;
-    my $options          = {allow_delete_all => 1};
+    my ($self, $table, $args) = @_;
+    
+    # Allow all delete
+    $args ||= {};
+    $args->{allow_delete_all} = 1;
     
     # Delete all rows
-    return $self->delete($table, {}, $append_statement, $query_edit_cb,
-                         $options);
+    return $self->delete($table, $args);
 }
 
-sub _select_usage { return << 'EOS' }
-Your select arguments is wrong.
-select usage:
-$dbi->select(
-    $table,                # must be string or array ref
-    [@$columns],           # must be array reference. this can be ommited
-    {%$where_params},      # must be hash reference.  this can be ommited
-    $append_statement,     # must be string.          this can be ommited
-    $query_edit_callback   # must be code reference.  this can be ommited
-);
-EOS
+our %VALID_SELECT_ARGS
+  = map { $_ => 1 } qw/columns where append filter/;
 
 sub select {
-    my $self = shift;
+    my ($self, $tables, $args) = @_;
     
-    # Check argument
-    croak($self->_select_usage) unless @_;
+    # Table
+    $tables ||= '';
+    $tables = [$tables] unless ref $tables;
+    
+    # Check arguments
+    foreach my $name (keys %$args) {
+        croak "\"$name\" is invalid name"
+          unless $VALID_SELECT_ARGS{$name};
+    }
     
     # Arguments
-    my $tables = shift || '';
-    $tables    = [$tables] unless ref $tables;
-    
-    my $columns          = ref $_[0] eq 'ARRAY' ? shift : [];
-    my $where_params     = ref $_[0] eq 'HASH'  ? shift : {};
-    my $append_statement = $_[0] && !ref $_[0]  ? shift : '';
-    my $query_edit_cb    = shift if ref $_[0] eq 'CODE';
-    
-    # Check rest argument
-    croak($self->_select_usage) if @_;
+    my $columns          = $args->{columns} || [];
+    my $where_params     = $args->{where} || {};
+    my $append_statement = $args->{append} || '';
+    my $filter    = $args->{filter};
     
     # SQL template for select statement
     my $template = 'select ';
@@ -646,14 +595,8 @@ sub select {
         $template .= " $append_statement";
     }
     
-    # Create query
-    my $query = $self->create_query($template);
-    
-    # Query edit
-    $query_edit_cb->($query) if $query_edit_cb;
-    
     # Execute query
-    my $result = $self->query($query, $where_params);
+    my $result = $self->execute($template, $where_params, {filter => $filter});
     
     return $result;
 }
@@ -682,27 +625,21 @@ sub _add_query_cache {
     return $class;
 }
 
-sub filter_off {
-    my $self = shift;
-    
-    # Filter off
-    $self->bind_filter(undef);
-    $self->fetch_filter(undef);
-    
-    return $self;
-}
-
 =head1 NAME
 
-DBIx::Custom - Customizable DBI
+DBIx::Custom - DBI with hash bind and filtering system 
 
 =head1 VERSION
 
-Version 0.1101
+Version 0.1301
 
 =cut
 
-our $VERSION = '0.1101';
+our $VERSION = '0.1301';
+
+=head1 STATE
+
+This module is not stable. Method name and functionality will be change.
 
 =head1 SYNOPSYS
     
@@ -711,27 +648,41 @@ our $VERSION = '0.1101';
                                 user => 'ken', password => '!LFKD%$&');
     
     # Query
-    $dbi->query("select title from books");
+    $dbi->execute("select title from books");
     
     # Query with parameters
-    $dbi->query("select id from books where {= author} && {like title}",
+    $dbi->execute("select id from books where {= author} && {like title}",
                 {author => 'ken', title => '%Perl%'});
     
     # Insert 
     $dbi->insert('books', {title => 'perl', author => 'Ken'});
     
     # Update 
-    $dbi->update('books', {title => 'aaa', author => 'Ken'}, {id => 5});
+    $dbi->update('books', {title => 'aaa', author => 'Ken'}, {where => {id => 5}});
     
     # Delete
-    $dbi->delete('books', {author => 'Ken'});
+    $dbi->delete('books', {where => {author => 'Ken'}});
     
     # Select
-    $dbi->select('books');
-    $dbi->select('books', {author => 'taro'}); 
-    $dbi->select('books', [qw/author title/], {author => 'Ken'});
-    $dbi->select('books', [qw/author title/], {author => 'Ken'},
-                 'order by id limit 1');
+    my $result = $dbi->select('books');
+    my $result = $dbi->select('books', {where => {author => 'taro'}}); 
+    
+    my $result = $dbi->select(
+       'books', 
+       {
+           columns => [qw/author title/],
+           where   => {author => 'Ken'}
+        }
+    );
+    
+    my $result = $dbi->select(
+        'books',
+        {
+            columns => [qw/author title/],
+            where   => {author => 'Ken'},
+            append  => 'order by id limit 1'
+        }
+    );
 
 =head1 ATTRIBUTES
 
@@ -790,12 +741,12 @@ DBI options
 
 =head2 sql_tmpl
 
-SQL::Template object
+SQLTemplate object
 
-    $dbi      = $dbi->sql_tmpl(DBIx::Cutom::SQL::Template->new);
+    $dbi      = $dbi->sql_tmpl(DBIx::Cutom::SQLTemplate->new);
     $sql_tmpl = $dbi->sql_tmpl;
 
-See also L<DBIx::Custom::SQL::Template>.
+See also L<DBIx::Custom::SQLTemplate>.
 
 =head2 filters
 
@@ -808,7 +759,7 @@ This method is generally used to get a filter.
 
     $filter = $dbi->filters->{encode_utf8};
 
-If you add filter, use add_filter method.
+If you add filter, use resist_filter method.
 
 =head2 formats
 
@@ -821,24 +772,26 @@ This method is generally used to get a format.
 
     $filter = $dbi->formats->{datetime};
 
-If you add format, use add_format method.
+If you add format, use resist_format method.
 
-=head2 bind_filter
+=head2 default_query_filter
 
 Binding filter
 
-    $dbi         = $dbi->bind_filter($bind_filter);
-    $bind_filter = $dbi->bind_filter
+    $dbi                 = $dbi->default_query_filter($default_query_filter);
+    $default_query_filter = $dbi->default_query_filter
 
-The following is bind filter sample
-
-    $dbi->bind_filter(sub {
-        my ($value, $key, $dbi, $infos) = @_;
+The following is bind filter example
+    
+    $dbi->resist_filter(encode_utf8 => sub {
+        my $value = shift;
         
-        # edit $value
+        require Encode 'encode_utf8';
         
-        return $value;
+        return encode_utf8($value);
     });
+    
+    $dbi->default_query_filter('encode_utf8')
 
 Bind filter arguemts is
 
@@ -847,22 +800,24 @@ Bind filter arguemts is
     3. $dbi   : DBIx::Custom object
     4. $infos : {table => $table, column => $column}
 
-=head2 fetch_filter
+=head2 default_fetch_filter
 
 Fetching filter
 
-    $dbi          = $dbi->fetch_filter($fetch_filter);
-    $fetch_filter = $dbi->fetch_filter;
+    $dbi                  = $dbi->default_fetch_filter($default_fetch_filter);
+    $default_fetch_filter = $dbi->default_fetch_filter;
 
-The following is fetch filter sample
+The following is fetch filter example
 
-    $dbi->fetch_filter(sub {
-        my ($value, $key, $dbi, $infos) = @_;
+    $dbi->resist_filter(decode_utf8 => sub {
+        my $value = shift;
         
-        # edit $value
+        require Encode 'decode_utf8';
         
-        return $value;
+        return decode_utf8($value);
     });
+
+    $dbi->default_fetch_filter('decode_utf8');
 
 Bind filter arguemts is
 
@@ -870,20 +825,6 @@ Bind filter arguemts is
     2. $key   : Key
     3. $dbi   : DBIx::Custom object
     4. $infos : {type => $table, sth => $sth, index => $index}
-
-=head2 no_bind_filters
-
-Key list which dose not have to bind filtering
-    
-    $dbi             = $dbi->no_bind_filters(qw/title author/);
-    $no_bind_filters = $dbi->no_bind_filters;
-
-=head2 no_fetch_filters
-
-Key list which dose not have to fetch filtering
-
-    $dbi              = $dbi->no_fetch_filters(qw/title author/);
-    $no_fetch_filters = $dbi->no_fetch_filters;
 
 =head2 result_class
 
@@ -941,26 +882,15 @@ Check if database is connected.
     
     $is_connected = $dbi->connected;
     
-=head2 filter_off
-
-bind_filter and fitch_filter off
-    
-    $dbi->filter_off
-    
-This method is equeal to
-    
-    $dbi->bind_filter(undef);
-    $dbi->fetch_filter(undef);
-
-=head2 add_filter
+=head2 resist_filter
 
 Resist filter
     
-    $dbi->add_filter($fname1 => $filter1, $fname => $filter2);
+    $dbi->resist_filter($fname1 => $filter1, $fname => $filter2);
     
-The following is add_filter sample
+The following is resist_filter example
 
-    $dbi->add_filter(
+    $dbi->resist_filter(
         encode_utf8 => sub {
             my ($value, $key, $dbi, $infos) = @_;
             utf8::upgrade($value) unless Encode::is_utf8($value);
@@ -972,15 +902,15 @@ The following is add_filter sample
         }
     );
 
-=head2 add_format
+=head2 resist_format
 
 Add format
 
-    $dbi->add_format($fname1 => $format, $fname2 => $format2);
+    $dbi->resist_format($fname1 => $format, $fname2 => $format2);
     
-The following is add_format sample.
+The following is resist_format example.
 
-    $dbi->add_format(date => '%Y:%m:%d', datetime => '%Y-%m-%d %H:%M:%S');
+    $dbi->resist_format(date => '%Y:%m:%d', datetime => '%Y-%m-%d %H:%M:%S');
 
 =head2 create_query
     
@@ -990,30 +920,28 @@ Create Query object parsing SQL template
 
 $query is <DBIx::Query> object. This is executed by query method as the following
 
-    $dbi->query($query, $params);
+    $dbi->execute($query, $params);
 
-If you know SQL template, see also L<DBIx::Custom::SQL::Template>.
+If you know SQL template, see also L<DBIx::Custom::SQLTemplate>.
 
-=head2 query
+=head2 execute
 
 Query
 
-    $result = $dbi->query($template, $params);
+    $result = $dbi->execute($template, $params);
 
-The following is query sample
+The following is query example
 
-    $result = $dbi->query("select * from authors where {= name} and {= age}", 
+    $result = $dbi->execute("select * from authors where {= name} and {= age}", 
                           {author => 'taro', age => 19});
     
     while (my @row = $result->fetch) {
         # do something
     }
 
-If you now syntax of template, See also L<DBIx::Custom::SQL::Template>
+If you now syntax of template, See also L<DBIx::Custom::SQLTemplate>
 
-Return value of query method is L<DBIx::Custom::Result> object
-
-See also L<DBIx::Custom::Result>.
+execute() return L<DBIx::Custom::Result> object
 
 =head2 transaction
 
@@ -1055,7 +983,7 @@ Insert row
 
 Retrun value is affected rows count
     
-The following is insert sample.
+The following is insert example.
 
     $dbi->insert('books', {title => 'Perl', author => 'Taro'});
 
@@ -1072,7 +1000,7 @@ Update rows
 
 Retrun value is affected rows count
 
-The following is update sample.
+The following is update example.
 
     $dbi->update('books', {title => 'Perl', author => 'Taro'}, {id => 5});
 
@@ -1089,7 +1017,7 @@ Update all rows
 
 Retrun value is affected rows count
 
-The following is update_all sample.
+The following is update_all example.
 
     $dbi->update_all('books', {author => 'taro'});
 
@@ -1102,7 +1030,7 @@ Delete rows
 
 Retrun value is affected rows count
     
-The following is delete sample.
+The following is delete example.
 
     $dbi->delete('books', {id => 5});
 
@@ -1118,7 +1046,7 @@ Delete all rows
 
 Retrun value is affected rows count
 
-The following is delete_all sample.
+The following is delete_all example.
 
     $dbi->delete_all('books');
 
@@ -1136,7 +1064,7 @@ Select rows
 
 $reslt is L<DBIx::Custom::Result> object
 
-The following is some select samples
+The following is some select examples
 
     # select * from books;
     $result = $dbi->select('books');
@@ -1168,34 +1096,13 @@ You can also edit query
         # column, where clause, append statement,
         sub {
             my $query = shift;
-            $query->bind_filter(sub {
+            $query->query_filter(sub {
                 # ...
             });
         }
     }
 
-=head2 prepare
-
-Prepare statement handle.
-
-    $sth = $dbi->prepare('select * from books;');
-
-This method is same as DBI prepare method.
-
-See also L<DBI>.
-
-=head2 do
-
-Execute SQL
-
-    $affected = $dbi->do('insert into books (title, author) values (?, ?)',
-                        'Perl', 'taro');
-
-Retrun value is affected rows count.
-
-This method is same as DBI do method.
-
-See also L<DBI>
+=head2 run_transaction
 
 =head1 DBIx::Custom default configuration
 

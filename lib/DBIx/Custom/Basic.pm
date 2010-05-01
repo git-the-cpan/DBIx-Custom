@@ -4,14 +4,16 @@ use warnings;
 use strict;
 
 use base 'DBIx::Custom';
+
 use Encode qw/decode encode/;
 
-__PACKAGE__->add_filter(
-    encode_utf8 => sub { encode('UTF-8', shift) },
-    decode_utf8 => sub { decode('UTF-8', shift) }
+__PACKAGE__->resist_filter(
+    none        => sub { $_[0] },
+    encode_utf8 => sub { encode('UTF-8', $_[0]) },
+    decode_utf8 => sub { decode('UTF-8', $_[0]) }
 );
 
-__PACKAGE__->add_format(
+__PACKAGE__->resist_format(
     'SQL99_date'        => '%Y-%m-%d',
     'SQL99_datetime'    => '%Y-%m-%d %H:%M:%S',
     'SQL99_time'        => '%H:%M:%S',
@@ -19,16 +21,6 @@ __PACKAGE__->add_format(
     'ISO-8601_datetime' => '%Y-%m-%dT%H:%M:%S',
     'ISO-8601_time'     => '%H:%M:%S',
 );
-
-sub utf8_filter_on {
-    my $self = shift;
-    
-    # Set utf8 filters
-    $self->bind_filter($self->filters->{encode_utf8});
-    $self->fetch_filter($self->filters->{decode_utf8});
-    
-    return $self;
-}
 
 1;
 
@@ -49,17 +41,6 @@ DBIx::Custom::Basic - DBIx::Custom basic implementation
 
 This class is L<DBIx::Custom> subclass.
 You can use all methods of L<DBIx::Custom>
-
-=head2 utf8_filter_on
-
-Encode and decode utf8 filter on
-
-    $dbi->utf8_filter_on;
-
-This equel to
-
-    $dbi->bind_filter($dbi->filters->{encode_utf8});
-    $dbi->fetch_filter($dbi->filters->{decode_utf8});
 
 =head1 FILTERS
 
@@ -83,7 +64,7 @@ This filter is generally used as fetch filter
 
     $dbi->fetch_filter($dbi->filters->{decode_utf8});
 
-=head1 DATE FORMATS
+=head1 FORMATS
     
 strptime formats is available
     
