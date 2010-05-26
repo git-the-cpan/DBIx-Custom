@@ -3,18 +3,14 @@ package DBIx::Custom::SQLite;
 use strict;
 use warnings;
 
-use base 'DBIx::Custom::Basic';
+use base 'DBIx::Custom';
 use Carp 'croak';
 
-# Add format
-__PACKAGE__->register_format(
-    datetime => __PACKAGE__->formats->{SQL99_datetime},
-    date     => __PACKAGE__->formats->{SQL99_date},
-    time     => __PACKAGE__->formats->{SQL99_time},
-);
-
 sub connect {
-    my $self = shift;
+    my $proto = shift;
+    
+    # Create
+    my $self = ref $proto ? $proto : $proto->new(@_);
     
     # Create data source
     if (!$self->data_source && (my $database = $self->database)) {
@@ -63,6 +59,8 @@ sub last_insert_rowid {
     return $last_insert_rowid;
 }
 
+1;
+
 =head1 NAME
 
 DBIx::Custom::SQLite - DBIx::Custom SQLite implementation
@@ -72,11 +70,12 @@ DBIx::Custom::SQLite - DBIx::Custom SQLite implementation
     use DBIx::Custom::SQLite;
     
     # New
-    my $dbi = DBIx::Custom::SQLite->new(user => 'taro', $password => 'kl&@K',
-                                        database => 'sample');
+    my $dbi = DBIx::Custom::SQLite->connect(user      => 'taro', 
+                                            $password => 'kl&@K',
+                                            database  => 'sample');
     
     # Connect memory database
-    my $dbi->connect_memory;
+    my $dbi = DBIx::Custom::SQLite->connect_memory;
     
 
 =head1 METHODS

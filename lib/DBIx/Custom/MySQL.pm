@@ -3,17 +3,14 @@ package DBIx::Custom::MySQL;
 use warnings;
 use strict;
 
-use base 'DBIx::Custom::Basic';
+use base 'DBIx::Custom';
 use Carp 'croak';
 
-__PACKAGE__->register_format(
-    datetime => __PACKAGE__->formats->{SQL99_datetime},
-    date     => __PACKAGE__->formats->{SQL99_date},
-    time     => __PACKAGE__->formats->{SQL99_time},
-);
-
 sub connect {
-    my $self = shift;
+    my $proto = shift;
+    
+    # Create
+    my $self = ref $proto ? $proto : $proto->new(@_);
     
     # Create data source
     if (!$self->data_source) {
@@ -44,6 +41,8 @@ sub last_insert_id {
     return $last_insert_id;
 }
 
+1;
+
 =head1 NAME
 
 DBIx::Custom::MySQL - DBIx::Custom MySQL implementation
@@ -51,8 +50,9 @@ DBIx::Custom::MySQL - DBIx::Custom MySQL implementation
 =head1 SYNOPSYS
 
     # New
-    my $dbi = DBIx::Custom::MySQL->new(user => 'taro', $password => 'kliej&@K',
-                                       database => 'sample_db');
+    my $dbi = DBIx::Custom::MySQL->connect(user      => 'taro', 
+                                           $password => 'kliej&@K',
+                                           database  => 'sample_db');
 
 =head1 METHODS
 

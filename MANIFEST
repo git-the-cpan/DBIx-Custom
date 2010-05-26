@@ -1,7 +1,6 @@
 Build.PL
 Changes
 lib/DBIx/Custom.pm
-lib/DBIx/Custom/Basic.pm
 lib/DBIx/Custom/MySQL.pm
 lib/DBIx/Custom/Query.pm
 lib/DBIx/Custom/Result.pm
@@ -14,17 +13,13 @@ META.yml
 README
 t/00-load.t
 t/boilerplate.t
-t/dbix-custom-basic-sqlite.t
-t/dbix-custom-basic-timeformat.t
 t/dbix-custom-core-mysql-private.t
 t/dbix-custom-core-sqlite.t
 t/dbix-custom-core.t
 t/dbix-custom-mysql-private.t
-t/dbix-custom-mysql-timeformat.t
 t/dbix-custom-query.t
 t/dbix-custom-result-sqlite.t
 t/dbix-custom-sql-template.t
-t/dbix-custom-sqlite-timeformat.t
 t/dbix-custom-sqlite.t
 t/pod-coverage.t
 t/pod.t
