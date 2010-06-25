@@ -26,6 +26,22 @@ __PACKAGE__->register_filter(
 __PACKAGE__->attr(result_class => 'DBIx::Custom::Result');
 __PACKAGE__->attr(sql_template => sub { DBIx::Custom::SQLTemplate->new });
 
+__PACKAGE__->attr(cache => 1);
+__PACKAGE__->attr(cache_method => sub {
+    sub {
+        my $self = shift;
+        
+        $self->{_cached} ||= {};
+        
+        if (@_ > 1) {
+            $self->{_cached}{$_[0]} = $_[1] 
+        }
+        else {
+            return $self->{_cached}{$_[0]}
+        }
+    }
+});
+
 sub connect {
     my $proto = shift;
     
@@ -38,7 +54,7 @@ sub connect {
     my $password    = $self->password;
     
     # Connect
-    my $dbh = eval{DBI->connect(
+    my $dbh = eval {DBI->connect(
         $data_source,
         $user,
         $password,
@@ -62,31 +78,29 @@ sub disconnect {
     my $self = shift;
     
     # Disconnect
-    $self->dbh->disconnect;
+    my $ret = eval { $self->dbh->disconnect };
+    croak $@ if $@;
     $self->dbh(undef);
     
-    return $self;
+    return $ret;
 }
 
 our %VALID_INSERT_ARGS = map { $_ => 1 } qw/table param append filter/;
 
 sub insert {
-    my $self = shift;
-    
-    # Arguments
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    my ($self, %args) = @_;
 
     # Check arguments
-    foreach my $name (keys %$args) {
+    foreach my $name (keys %args) {
         croak "\"$name\" is invalid name"
           unless $VALID_INSERT_ARGS{$name};
     }
     
     # Arguments
-    my $table  = $args->{table} || '';
-    my $param  = $args->{param} || {};
-    my $append = $args->{append} || '';
-    my $filter = $args->{filter};
+    my $table  = $args{table} || '';
+    my $param  = $args{param} || {};
+    my $append = $args{append} || '';
+    my $filter = $args{filter};
     
     # Insert keys
     my @insert_keys = keys %$param;
@@ -110,23 +124,21 @@ our %VALID_UPDATE_ARGS
   = map { $_ => 1 } qw/table param where append filter allow_update_all/;
 
 sub update {
-    my $self = shift;
-
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    my ($self, %args) = @_;
     
     # Check arguments
-    foreach my $name (keys %$args) {
+    foreach my $name (keys %args) {
         croak "\"$name\" is invalid name"
           unless $VALID_UPDATE_ARGS{$name};
     }
     
     # Arguments
-    my $table            = $args->{table} || '';
-    my $param            = $args->{param} || {};
-    my $where            = $args->{where} || {};
-    my $append_statement = $args->{append} || '';
-    my $filter           = $args->{filter};
-    my $allow_update_all = $args->{allow_update_all};
+    my $table            = $args{table} || '';
+    my $param            = $args{param} || {};
+    my $where            = $args{where} || {};
+    my $append_statement = $args{append} || '';
+    my $filter           = $args{filter};
+    my $allow_update_all = $args{allow_update_all};
     
     # Update keys
     my @update_keys = keys %$param;
@@ -183,40 +195,26 @@ sub update {
     return $ret_val;
 }
 
-sub update_all {
-    my $self = shift;;
-    
-    # Arguments
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-        
-    # Allow all update
-    $args->{allow_update_all} = 1;
-    
-    # Update all rows
-    return $self->update($args);
-}
+sub update_all { shift->update(allow_update_all => 1, @_) };
 
 our %VALID_DELETE_ARGS
   = map { $_ => 1 } qw/table where append filter allow_delete_all/;
 
 sub delete {
-    my $self = shift;
-    
-    # Arguments
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    my ($self, %args) = @_;
     
     # Check arguments
-    foreach my $name (keys %$args) {
+    foreach my $name (keys %args) {
         croak "\"$name\" is invalid name"
           unless $VALID_DELETE_ARGS{$name};
     }
     
     # Arguments
-    my $table            = $args->{table} || '';
-    my $where            = $args->{where} || {};
-    my $append_statement = $args->{append};
-    my $filter           = $args->{filter};
-    my $allow_delete_all = $args->{allow_delete_all};
+    my $table            = $args{table} || '';
+    my $where            = $args{where} || {};
+    my $append_statement = $args{append};
+    my $filter           = $args{filter};
+    my $allow_delete_all = $args{allow_delete_all};
     
     # Where keys
     my @where_keys = keys %$where;
@@ -246,42 +244,29 @@ sub delete {
     return $ret_val;
 }
 
-sub delete_all {
-    my $self = shift;
-    
-    # Arguments
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    
-    # Allow all delete
-    $args->{allow_delete_all} = 1;
-    
-    # Delete all rows
-    return $self->delete($args);
-}
+sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
 our %VALID_SELECT_ARGS
   = map { $_ => 1 } qw/table column where append relation filter param/;
 
 sub select {
-    my $self = shift;;
-    
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    my ($self, %args) = @_;
     
     # Check arguments
-    foreach my $name (keys %$args) {
+    foreach my $name (keys %args) {
         croak "\"$name\" is invalid name"
           unless $VALID_SELECT_ARGS{$name};
     }
     
     # Arguments
-    my $tables = $args->{table} || [];
+    my $tables = $args{table} || [];
     $tables = [$tables] unless ref $tables eq 'ARRAY';
-    my $columns  = $args->{column} || [];
-    my $where    = $args->{where} || {};
-    my $relation = $args->{relation};
-    my $append   = $args->{append};
-    my $filter   = $args->{filter};
-    my $param    = $args->{param} || {};
+    my $columns  = $args{column} || [];
+    my $where    = $args{where} || {};
+    my $relation = $args{relation};
+    my $append   = $args{append};
+    my $filter   = $args{filter};
+    my $param    = $args{param} || {};
     
     # SQL template for select statement
     my $template = 'select ';
@@ -339,27 +324,35 @@ sub create_query {
     # Create query from SQL template
     my $sql_template = $self->sql_template;
     
-    # Get cached query
-    my $cache = $self->{_cache}->{$template};
+    my $cache = $self->cache;
     
     # Create query
     my $query;
     if ($cache) {
-        $query = DBIx::Custom::Query->new(
-            sql       => $cache->sql,
-            columns   => $cache->columns
-        );
+        
+        # Cached query
+        my $q = $self->cache_method->($self, $template);
+        
+        # Create query
+        $query = DBIx::Custom::Query->new($q) if $q;
     }
-    else {
+    
+    unless ($query) {
+        
+        # Create query
         $query = eval{$sql_template->create_query($template)};
         croak($@) if $@;
         
-        $self->{_cache}->{$template} = $query
-          unless $self->{_cache}->{$template};
+        # Cache query
+        $self->cache_method->($self, $template,
+                             {sql     => $query->sql, 
+                              columns => $query->columns})
+          if $cache;
     }
     
     # Prepare statement handle
-    my $sth = $self->dbh->prepare($query->{sql});
+    my $sth = eval {$self->dbh->prepare($query->{sql})};
+    croak $@ if $@;
     
     # Set statement handle
     $query->sth($sth);
@@ -370,19 +363,15 @@ sub create_query {
 our %VALID_EXECUTE_ARGS = map { $_ => 1 } qw/param filter/;
 
 sub execute{
-    my $self  = shift;
-    my $query = shift;
-    
-    # Arguments
-    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    my ($self, $query, %args)  = @_;
     
     # Check arguments
-    foreach my $name (keys %$args) {
+    foreach my $name (keys %args) {
         croak "\"$name\" is invalid name"
           unless $VALID_EXECUTE_ARGS{$name};
     }
     
-    my $params = $args->{param} || {};
+    my $params = $args{param} || {};
     
     # First argument is SQL template
     unless (ref $query eq 'DBIx::Custom::Query') {
@@ -396,25 +385,15 @@ sub execute{
         $query = $self->create_query($template);
     }
     
-    my $filter = $args->{filter} || $query->filter || {};
+    my $filter = $args{filter} || $query->filter || {};
     
     # Create bind value
     my $bind_values = $self->_build_bind_values($query, $params, $filter);
     
     # Execute
     my $sth      = $query->sth;
-    my $affected = eval{$sth->execute(@$bind_values)};
-    
-    # Execute error
-    if (my $execute_error = $@) {
-        require Data::Dumper;
-        my $sql              = $query->{sql} || '';
-        my $params_dump      = Data::Dumper->Dump([$params], ['*params']);
-        
-        croak("$execute_error" . 
-              "<Your SQL>\n$sql\n" . 
-              "<Your parameters>\n$params_dump");
-    }
+    my $affected = eval {$sth->execute(@$bind_values)};
+    croak $@ if $@;
     
     # Return resultset if select statement is executed
     if ($sth->{NUM_OF_FIELDS}) {
@@ -494,6 +473,9 @@ sub register_filter {
 sub auto_commit {
     my $self = shift;
     
+    # Not connected
+    croak "Not connected" unless $self->dbh;
+    
     if (@_) {
         
         # Set AutoCommit
@@ -504,8 +486,16 @@ sub auto_commit {
     return $self->dbh->{AutoCommit};
 }
 
-sub commit   { shift->dbh->commit }
-sub rollback { shift->dbh->rollback }
+sub commit   { 
+    my $ret = eval { shift->dbh->commit };
+    croak $@ if $@;
+    return $ret;
+}
+sub rollback {
+    my $ret = eval { shift->dbh->rollback };
+    croak $@ if $@;
+    return $ret;
+}
 
 sub DESTROY {
     my $self = shift;
@@ -520,11 +510,11 @@ DBIx::Custom - DBI with hash parameter binding and filtering system
 
 =head1 VERSION
 
-Version 0.1503
+Version 0.1602
 
 =cut
 
-our $VERSION = '0.1503';
+our $VERSION = '0.1602';
 $VERSION = eval $VERSION;
 
 =head1 STABILITY
@@ -955,6 +945,39 @@ This is equal to
 
     $dbi->dbh->rollback;
 
+=head2 cache
+
+Cache the result of parsing SQL template.
+
+    $dbi   = $dbi->cache(1);
+    $cache = $dbi->cache;
+
+Default to 1.
+
+=head2 cache_method
+
+Method for cache.
+
+    $dbi          = $dbi->cache_method(sub { ... });
+    $cache_method = $dbi->cache_method
+
+Example:
+    
+    $dbi->cache_method(
+        sub {
+            my $self = shift;
+            
+            $self->{_cached} ||= {};
+            
+            if (@_ > 1) {
+                $self->{_cached}{$_[0]} = $_[1] 
+            }
+            else {
+                return $self->{_cached}{$_[0]}
+            }
+        }
+    );
+
 =head1 AUTHOR
 
 Yuki Kimoto, C<< <kimoto.yuki at gmail.com> >>
@@ -967,3 +990,5 @@ This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
 =cut
+
+
