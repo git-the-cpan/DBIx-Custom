@@ -10,29 +10,29 @@ use Carp 'croak';
 __PACKAGE__->attr([qw/sth filters default_filter filter/]);
 
 sub fetch {
-
-    $_[0]->{filters} ||= {};
-    $_[0]->{filter}  ||= {};
+    my $self = shift;
+    
+    $self->{filters} ||= {};
+    $self->{filter}  ||= {};
     
     # Fetch
-    my @row = $_[0]->{sth}->fetchrow_array;
+    my @row = $self->{sth}->fetchrow_array;
     
     # Cannot fetch
     return unless @row;
 
     # Filter
-    for (my $i = 0; $i < @{$_[0]->{sth}->{NAME_lc}}; $i++) {
-        my $fname  = $_[0]->{filter}->{$_[0]->{sth}->{NAME_lc}->[$i]} 
-                  || $_[0]->{default_filter};
+    for (my $i = 0; $i < @{$self->{sth}->{NAME_lc}}; $i++) {
         
-        croak "Filter \"$fname\" is not registered."
-          if $fname && ! exists $_[0]->{filters}->{$fname};
+        # Filter name
+        my $column = $self->{sth}->{NAME_lc}->[$i];
+        my $fname  = exists $self->{filter}->{$column}
+                   ? $self->{filter}->{$column}
+                   : $self->{default_filter};
         
-        next unless $fname;
-        
-        $row[$i] = ref $fname
-                   ? $fname->($row[$i]) 
-                   : $_[0]->{filters}->{$fname}->($row[$i]);
+        # Filter
+        $row[$i] = $self->{filters}->{$fname}->($row[$i])
+          if $fname;
     }
 
     return \@row;
@@ -57,7 +57,7 @@ sub fetch_multi {
     my ($self, $count) = @_;
     
     # Not specified Row count
-    croak("Row count must be specified")
+    croak 'Row count must be specified'
       unless $count;
     
     # Fetch multi rows
@@ -86,30 +86,31 @@ sub fetch_all {
 }
 
 sub fetch_hash {
-
-    $_[0]->{filters} ||= {};
-    $_[0]->{filter}  ||= {};
+    my $self = shift;
+    
+    $self->{filters} ||= {};
+    $self->{filter}  ||= {};
     
     # Fetch
-    my $row = $_[0]->{sth}->fetchrow_arrayref;
+    my $row = $self->{sth}->fetchrow_arrayref;
     
     # Cannot fetch
     return unless $row;
     
     # Filter
     my $row_hash = {};
-    for (my $i = 0; $i < @{$_[0]->{sth}->{NAME_lc}}; $i++) {
+    for (my $i = 0; $i < @{$self->{sth}->{NAME_lc}}; $i++) {
         
-        my $fname  = $_[0]->{filter}->{$_[0]->{sth}->{NAME_lc}->[$i]}
-                  || $_[0]->{default_filter};
+        # Filter name
+        my $column = $self->{sth}->{NAME_lc}->[$i];
+        my $fname  = exists $self->{filter}->{$column}
+                   ? $self->{filter}->{$column}
+                   : $self->{default_filter};
         
-        croak "Filter \"$fname\" is not registered."
-          if $fname && ! exists $_[0]->{filters}->{$fname};
-        
-        $row_hash->{$_[0]->{sth}->{NAME_lc}->[$i]}
-          = !$fname    ? $row->[$i] :
-            ref $fname ? $fname->($row->[$i]) :
-            $_[0]->{filters}->{$fname}->($row->[$i]);
+        # Filter
+        $row_hash->{$column}
+          = $fname ? $self->{filters}->{$fname}->($row->[$i]) 
+                   : $row->[$i];
     }
     
     return $row_hash;
@@ -134,7 +135,7 @@ sub fetch_hash_multi {
     my ($self, $count) = @_;
     
     # Not specified Row count
-    croak("Row count must be specified")
+    croak 'Row count must be specified'
       unless $count;
     
     # Fetch multi rows
@@ -159,6 +160,7 @@ sub fetch_hash_all {
     while(my $row = $self->fetch_hash) {
         push @$rows, $row;
     }
+    
     return $rows;
 }
 
@@ -166,7 +168,7 @@ sub fetch_hash_all {
 
 =head1 NAME
 
-DBIx::Custom::Result - DBIx::Custom Resultset
+DBIx::Custom::Result - Result of select
 
 =head1 SYNOPSIS
     
@@ -215,24 +217,24 @@ DBIx::Custom::Result - DBIx::Custom Resultset
 
 =head2 C<sth>
 
+    my $sth = $reuslt->sth
+    $result = $result->sth($sth);
+
 Statement handle.
 
-    $result = $result->sth($sth);
-    $sth    = $reuslt->sth
-    
 =head2 C<default_filter>
 
-Default filter.
+    my $default_filter = $result->default_filter;
+    $result            = $result->default_filter('decode_utf8');
 
-    $result         = $result->default_filter('decode_utf8');
-    $default_filter = $result->default_filter;
+Default filter for fetching.
 
 =head2 C<filter>
 
-Filter
-
+    my $filter = $result->filter;
     $result = $result->filter({title => 'decode_utf8'});
-    $filter = $result->filter;
+
+Filters for fetching.
 
 =head1 METHODS
 
@@ -241,11 +243,9 @@ You can use all methods of L<Object::Simple>
 
 =head2 C<fetch>
 
-Fetch a row into array
-
     $row = $result->fetch;
 
-Example:
+Fetch a row into array
 
     while (my $row = $result->fetch) {
         # do something
@@ -255,17 +255,15 @@ Example:
 
 =head2 C<fetch_first>
 
-Fetch only first row into array and finish statment handle.
-
     $row = $result->fetch_first;
+
+Fetch only first row into array and finish statment handle.
 
 =head2 C<fetch_multi>
 
-Fetch multiple rows into array of array.
-
     $rows = $result->fetch_multi($count);
     
-Example:
+Fetch multiple rows into array of array.
 
     while(my $rows = $result->fetch_multi(10)) {
         # do someting
@@ -273,17 +271,15 @@ Example:
 
 =head2 C<fetch_all>
 
-Fetch all rows into array of array.
-
     $rows = $result->fetch_all;
+
+Fetch all rows into array of array.
 
 =head2 C<fetch_hash>
 
-Fetch a row into hash
-
     $row = $result->fetch_hash;
 
-Example:
+Fetch a row into hash
 
     while (my $row = $result->fetch_hash) {
         my $val1 = $row->{title};
@@ -294,17 +290,15 @@ Example:
 
 =head2 C<fetch_hash_first>
     
-Fetch only first row into hash and finish statment handle.
-
     $row = $result->fetch_hash_first;
+
+Fetch only first row into hash and finish statment handle.
 
 =head2 C<fetch_hash_multi>
 
-Fetch multiple rows into array of hash
-
     $rows = $result->fetch_hash_multi($count);
     
-Example:
+Fetch multiple rows into array of hash
 
     while(my $rows = $result->fetch_hash_multi(10)) {
         # do someting
@@ -312,8 +306,8 @@ Example:
 
 =head2 C<fetch_hash_all>
 
-Fetch all rows into array of hash.
-
     $rows = $result->fetch_hash_all;
+
+Fetch all rows into array of hash.
 
 =cut

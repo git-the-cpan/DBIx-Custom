@@ -11,49 +11,48 @@ __PACKAGE__->attr([qw/sql columns default_filter filter sth/]);
 
 =head1 NAME
 
-DBIx::Custom::Query - query used by DBIx::Custom
+DBIx::Custom::Query - Query
 
 =head1 SYNOPSIS
     
-    # New
     my $query = DBIx::Custom::Query->new;
     
 =head1 ATTRIBUTES
 
 =head2 C<sql>
 
-SQL statement.
+    my $sql = $query->sql;
+    $query  = $query->sql($sql);
 
-    $query = $query->sql($sql);
-    $sql   = $query->sql;
+SQL statement.
 
 =head2 C<columns>
 
-Column names.
+    my $columns = $query->columns;
+    $query      = $query->columns(\@columns);
 
-    $query   = $query->columns([@columns]);
-    $columns = $query->columns;
+Column names.
 
 =head2 C<default_filter>
 
-Default filter.
+    my $default_filter = $query->default_filter;
+    $query             = $query->default_filter($filter);
 
-    $query          = $query->default_filter($filter);
-    $default_filter = $query->default_filter;
+Default filter for value binding.
 
 =head2 C<filter>
 
-Filter.
+    my $filter = $query->filter;
+    $query     = $query->filter(\%filter);
 
-    $query  = $query->filter({%filter});
-    $filter = $query->filter;
+Filters for value binding
 
 =head2 C<sth>
 
-Statement handle.
+    my $sth = $query->sth;
+    $query  = $query->sth($sth);
 
-    $query = $query->sth($sth);
-    $sth   = $query->sth;
+Statement handle.
 
 =head1 METHODS
 
