@@ -4,7 +4,7 @@ lib/DBIx/Custom.pm
 lib/DBIx/Custom/MySQL.pm
 lib/DBIx/Custom/Query.pm
 lib/DBIx/Custom/QueryBuilder.pm
-lib/DBIx/Custom/QueryBuilder/TagProcessor.pm
+lib/DBIx/Custom/QueryBuilder/TagProcessors.pm
 lib/DBIx/Custom/Result.pm
 lib/DBIx/Custom/SQLite.pm
 Makefile.PL
