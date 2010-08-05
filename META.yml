@@ -1,6 +1,6 @@
 ---
 name: DBIx-Custom
-version: 0.1605
+version: 0.1606
 author:
   - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 abstract: DBI with hash parameter binding and filtering system
@@ -17,7 +17,7 @@ build_requires:
 provides:
   DBIx::Custom:
     file: lib/DBIx/Custom.pm
-    version: 0.1605
+    version: 0.1606
   DBIx::Custom::MySQL:
     file: lib/DBIx/Custom/MySQL.pm
   DBIx::Custom::Query:
