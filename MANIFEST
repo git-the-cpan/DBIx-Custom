@@ -18,8 +18,8 @@ t/dbix-custom-core-sqlite.t
 t/dbix-custom-core.t
 t/dbix-custom-mysql-private.t
 t/dbix-custom-query.t
+t/dbix-custom-querybuilder.t
 t/dbix-custom-result-sqlite.t
-t/dbix-custom-sql-template.t
 t/dbix-custom-sqlite.t
 t/pod-coverage.t
 t/pod.t
