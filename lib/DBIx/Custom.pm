@@ -457,7 +457,7 @@ DBIx::Custom - DBI interface, having hash parameter binding and filtering system
 
 =cut
 
-our $VERSION = '0.1607';
+our $VERSION = '0.1608';
 
 =head1 STABILITY
 
@@ -580,9 +580,7 @@ so all people learing database system know it.
 If you know SQL statement,
 you learn a little thing about L<DBIx::Custom> to do your works.
 
-=head2 2. Basic usage
-
-=head3 connect to the database
+=head2 1. Connect to the database
 
 C<connect()> method create a new L<DBIx::Custom>
 object and connect to the database.
@@ -591,13 +589,24 @@ object and connect to the database.
     my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=books",
                                     user => 'ken', password => '!LFKD%$&');
 
-=head3 Suger methods
+If database is SQLite, use L<DBIx::Custom::SQLite>. you connect database easy way.
+
+    use DBIx::Custom::SQLite;
+    my $dbi = DBIx::Custom->connect(database => 'books');
+    
+If database is  MySQL, use L<DBIx::Costm::MySQL>.
+
+    use DBIx::Custom::MySQL;
+    my $dbi = DBIx::Custom->connect(database => 'books',
+                                    user => 'ken', password => '!LFKD%$&');
+
+=head2 2. Suger methods
 
 L<DBIx::Custom> has suger methods, such as C<insert()>, C<update()>,
 C<delete()> and C<select()>. If you want to do simple works,
 You don't have to create SQL statement.
 
-B<Execute insert statement:>
+=head3 insert()
 
     $dbi->insert(table  => 'books',
                  param  => {title => 'perl', author => 'Ken'});
@@ -608,7 +617,9 @@ The following SQL is executed.
 
 The values of C<title> and C<author> is embedded into placeholders.
 
-B<Execute update statement:>
+C<append> and C<filter> argument can be specified if you need.
+
+=head3 update()
 
     $dbi->update(table  => 'books', 
                  param  => {title => 'aaa', author => 'Ken'}, 
@@ -622,7 +633,9 @@ The values of C<title> and C<author> is embedded into placeholders.
 
 If you want to update all rows, use C<update_all()> method instead.
 
-B<Execute delete statement:>
+C<append> and C<filter> argument can be specified if you need.
+
+=head3 delete()
 
     $dbi->delete(table  => 'books',
                  where  => {author => 'Ken'});
@@ -633,9 +646,11 @@ The following SQL is executed.
 
 The value of C<id> is embedded into a placehodler.
 
+C<append> and C<filter> argument can be specified if you need.
+
 If you want to delete all rows, use C<delete_all()> method instead.
 
-B<Execute select statement:>
+=head3 select()
 
 Specify only table:
 
@@ -654,7 +669,7 @@ use C<fetch()> method to fetch a row.
     }
 
 L<DBIx::Custom::Result> has various methods to fetch row.
-See "2. Result of select statement".
+See "3. Result of select statement".
 
 Specify C<column> and C<where> arguments:
 
@@ -681,6 +696,206 @@ The following SQL is executed.
 
     select books.name as book_name from books
     where books.id = rental.book_id;
+
+C<append> argument add a string to the end of SQL statement.
+It is useful to add "order by" or "limit" cluase.
+
+    # Select, more complex
+    my $result = $dbi->select(
+        table  => 'books',
+        where  => {author => 'Ken'},
+        append => 'order by price limit 5',
+    );
+
+The following SQL is executed.
+
+    select * books where author = ? order by price limit 5;
+
+C<filter> argument can be specified if you need.
+
+=head2 3. Result of select statement
+
+C<select> method reurn L<DBIx::Custom::Result> object.
+Using various methods, you can fetch row.
+
+Fetch row into array.
+    
+    while (my $row = $result->fetch) {
+        my $author = $row->[0];
+        my $title  = $row->[1];
+        
+    }
+
+Fetch only a first row into array.
+
+    my $row = $result->fetch_first;
+
+Fetch multiple rows into array of array.
+
+    while (my $rows = $result->fetch_multi(5)) {
+        my $first_author  = $rows->[0][0];
+        my $first_title   = $rows->[0][1];
+        my $second_author = $rows->[1][0];
+        my $second_value  = $rows->[1][1];
+    
+    }
+    
+Fetch all rows into array of array.
+
+    my $rows = $result->fetch_all;
+
+Fetch row into hash.
+
+    # Fetch a row into hash
+    while (my $row = $result->fetch_hash) {
+        my $title  = $row->{title};
+        my $author = $row->{author};
+        
+    }
+
+Fetch only a first row into hash
+
+    my $row = $result->fetch_hash_first;
+    
+Fetch multiple rows into array of hash
+
+    while (my $rows = $result->fetch_hash_multi(5)) {
+        my $first_title   = $rows->[0]{title};
+        my $first_author  = $rows->[0]{author};
+        my $second_title  = $rows->[1]{title};
+        my $second_author = $rows->[1]{author};
+    
+    }
+    
+Fetch all rows into array of hash
+
+    my $rows = $result->fetch_hash_all;
+
+If you want to access row statement handle of L<DBI>, use sth() attribute.
+
+    my $sth = $result->sth;
+
+=head2 4. Hash parameter binding
+
+L<DBIx::Custom> provides hash parameter binding.
+
+At frist, I show normal way of parameter binding.
+
+    use DBI;
+    my $dbh = DBI->connect(...);
+    my $sth = $dbh->prepare(
+        "select * from books where author = ? and title like ?;"
+    );
+    $sth->execute('Ken', '%Perl%');
+
+This is very good way because database system enable SQL caching,
+and parameter is quoted automatically.
+
+L<DBIx::Custom>hash parameter binding system improve normal parameter binding to
+specify hash parameter.
+
+    my $result = $dbi->execute(
+        "select * from books where {= author} and {like title};"
+        param => {author => 'Ken', title => '%Perl%'}
+    );
+
+This is same as the normal way, execpt that the parameter is hash.
+{= author} is called C<tag>. tag is expand to placeholder internally.
+
+    select * from books where {= author} and {like title}
+      -> select * from books where author = ? and title like ?;
+
+See L<DBIx::Custom::QueryBuilder> to know all tags.
+
+=head2 5. Filtering
+
+Usually, Perl string is kept as internal string.
+If you want to save the string to database, You must encode the string.
+Filtering system help you to convert a data to another data
+when you save to the data and get the data form database.
+
+If you want to register filter, use register_filter() method.
+
+    $dbi->register_filter(
+        to_upper_case => sub {
+            my $value = shift;
+            return uc $value;
+        }
+    );
+
+C<encode_utf8> and C<decode_utf8> filter is registerd by default.
+
+You can specify these filters to C<filter> argument of C<execute()> method.
+
+    my $result = $dbi->execute(
+        "select * from books where {= author} and {like title};"
+        param => {author => 'Ken', title => '%Perl%'});
+        filter => {author => 'to_upper_case, title => 'encode_utf8'}
+    );
+
+you can also specify filter in suger methods, such as select(), update(), update_all,
+delete(), delete_all(), select().
+
+    $dbi->insert(table  => 'books',
+                 param  => {title => 'perl', author => 'Ken'},
+                 filter => {title => 'encode_utf8'});
+
+    my $result = $dbi->select(
+        table  => 'books',
+        column => [qw/author title/],
+        where  => {author => 'Ken'},
+        append => 'order by id limit 1',
+        filter => {title => 'encode_utf8'}
+    );
+
+Filter work to each parmeter, but you prepare default filter for all parameters.
+you can use C<default_bind_filter()> attribute.
+
+    $dbi->default_bind_filter('encode_utf8');
+
+C<filter()> argument overwrites the filter specified by C<default_bind_filter()>.
+    
+    $dbi->default_bind_filter('encode_utf8');
+    $dbi->insert(
+        table  => 'books',
+        param  => {title => 'perl', author => 'Ken', price => 1000},
+        filter => {author => 'to_upper_case', price => undef}
+    );
+
+This is same as the following one.
+
+    $dbi->insert(
+        table  => 'books',
+        param  => {title => 'perl', author => 'Ken', price => 1000},
+        filter => {title => 'encode_uft8' author => 'to_upper_case'}
+    );
+
+You can also specify filter when the row is fetching. This is reverse of bindig filter.
+
+    my $result = $dbi->select(table => 'books');
+    $result->filter({title => 'decode_utf8', author => 'to_upper_case'});
+
+you can specify C<default_fetch_filter()>.
+
+    $dbi->default_fetch_filter('decode_utf8');
+
+C<DBIx::Custom::Result::filter> overwrites the filter specified
+by C<default_fetch_filter()>
+
+    $dbi->default_fetch_filter('decode_utf8');
+    my $result = $dbi->select(
+        table => 'books',
+        columns => ['title', 'author', 'price']
+    );
+    $result->filter({author => 'to_upper_case', price => undef});
+
+This is same as the following one.
+
+    my $result = $dbi->select(
+        table => 'books',
+        columns => ['title', 'author', 'price']
+    );
+    $result->filter({title => 'decode_utf8', author => 'to_upper_case'});
 
 =head1 ATTRIBUTES
 

@@ -1,3 +1,6 @@
+0.1608
+  update document
+  renamed DBIx::Custom::QueryBuilder::TagProcessors functions(not backword compatible)
 0.1607
   where argument of select() method can specify array(string, paramters)
   renamed build_query() to create_query()(not backword compatible)
