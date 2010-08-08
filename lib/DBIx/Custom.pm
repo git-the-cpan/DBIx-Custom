@@ -42,6 +42,8 @@ __PACKAGE__->attr(cache_method => sub {
     }
 });
 
+__PACKAGE__->attr(filter_check => 1);
+
 sub connect {
     my $proto = shift;
     
@@ -394,7 +396,8 @@ sub execute{
         my $result = $self->result_class->new(
             sth            => $sth,
             default_filter => $self->default_fetch_filter,
-            filters        => $self->filters
+            filters        => $self->filters,
+            filter_check   => $self->filter_check
         );
 
         return $result;
@@ -407,6 +410,17 @@ sub _build_bind_values {
     
     # binding values
     my @bind_values;
+
+    # Filter
+    $filter ||= {};
+    
+    # Parameter
+    $params ||= {};
+    
+    # Check filter
+    $self->_check_filter($self->filters, $filter,
+                         $self->default_bind_filter, $params)
+      if $self->filter_check;
     
     # Build bind values
     my $count = {};
@@ -419,9 +433,6 @@ sub _build_bind_values {
         my $value = ref $params->{$column} eq 'ARRAY'
                   ? $params->{$column}->[$count->{$column} || 0]
                   : $params->{$column};
-        
-        # Filter
-        $filter ||= {};
         
         # Filter name
         my $fname = $filter->{$column} || $self->default_bind_filter || '';
@@ -451,13 +462,34 @@ sub _build_bind_values {
     return \@bind_values;
 }
 
+sub _check_filter {
+    my ($self, $filters, $filter, $default_filter, $params) = @_;
+    
+    # Filter name not exists
+    foreach my $fname (values %$filter) {
+        croak qq{Bind filter "$fname" is not registered}
+          unless exists $filters->{$fname};
+    }
+    
+    # Default filter name not exists
+    croak qq{Default bind filter "$default_filter" is not registered}
+      if $default_filter && ! exists $filters->{$default_filter};
+    
+    # Column name not exists
+    foreach my $column (keys %$filter) {
+        
+        croak qq{Column name "$column" in bind filter is not found in paramters}
+          unless exists $params->{$column};
+    }
+}
+
 =head1 NAME
 
 DBIx::Custom - DBI interface, having hash parameter binding and filtering system
 
 =cut
 
-our $VERSION = '0.1609';
+our $VERSION = '0.1610';
 
 =head1 STABILITY
 
@@ -941,7 +973,18 @@ This is same as the following one.
     );
     $result->filter({title => 'decode_utf8', author => 'to_upper_case'});
 
+In fetch filter, column name must be lower case even if column conatain upper case charactor. This is requirment not to depend database systems.
+
 =head2 6. Performance
+
+=head3 Disable filter checking
+
+C<filter_check> is 1 by defaut. This is useful in debug.
+
+This filter check maybe damege performance.
+If you require performance, set C<filter_check> to 0.
+
+=head3 Using execute() method instead suger methods
 
 If you execute insert statement by using select() method,
 you sometimes can't meet performance requirment.
@@ -972,6 +1015,8 @@ Execute query repeatedly
     }
 
 This is faster than C<insert()> and C<update()> method.
+
+=head2 caching
 
 C<execute()> method cache the parsing result of SQL soruce.
 Default to 1
@@ -1150,6 +1195,16 @@ B<Example:>
             }
         }
     );
+
+=head2 C<filter_check>
+
+    my $filter_check = $dbi->filter_check;
+    $dbi             = $dbi->filter_check(0);
+
+Enable filter check. 
+Default to 1.
+This check maybe damege performance.
+If you require performance, set C<filter_check> to 0.
 
 =head1 METHODS
 
