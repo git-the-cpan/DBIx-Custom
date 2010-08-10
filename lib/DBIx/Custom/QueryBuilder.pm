@@ -137,7 +137,11 @@ sub _build_query {
               unless ref $tag_processor eq 'CODE';
             
             # Execute tag processor
-            my $r = $tag_processor->(@$tag_args);
+            my $r;
+            {
+                local $Carp::CarpLevel += 1;
+                $r = $tag_processor->(@$tag_args);
+            }
             
             # Check tag processor return value
             croak qq{Tag processor "$tag_name" must return [STRING, ARRAY_REFERENCE]}
@@ -322,13 +326,13 @@ In tag.
 
     {in NAME COUNT}   ->   NAME in [?, ?, ..]
 
-=head2 C<insert>
+=head2 C<insert_param>
 
 Insert parameter tag.
 
     {insert_param NAME1 NAME2}   ->   (NAME1, NAME2) values (?, ?)
 
-=head2 C<update>
+=head2 C<update_param>
 
 Updata parameter tag.
 
