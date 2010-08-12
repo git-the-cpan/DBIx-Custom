@@ -16,6 +16,8 @@ my $datas;
 my $builder;
 my $query;
 my $ret_val;
+my $source;
+my $tree;
 
 test "Various source pattern";
 $datas = [
@@ -141,4 +143,25 @@ like($@, qr/\QColumn name and count of values must be specified in tag "{in }"/,
 eval{$builder->build_query("{in a r}")};
 like($@, qr/\QColumn name and count of values must be specified in tag "{in }"/,
      "$test : in : key not exist");
+
+test 'variouse source';
+$source = "a {= b} c \\{ \\} {= \\{} {= \\}} d;";
+$query = $builder->build_query($source);
+is($query->sql, 'a b = ? c { } { = ? } = ? d;', "$test : 1");
+
+$source = "abc;";
+$query = $builder->build_query($source);
+is($query->sql, 'abc;', "$test : 2");
+
+$source = "{= a}";
+$query = $builder->build_query($source);
+is($query->sql, 'a = ?;', "$test : 3");
+
+$source = "a {= b} }";
+eval{$builder->build_query($source)};
+like($@, qr/unexpected "}"/, "$test : error : 1");
+
+$source = "a {= {}";
+eval{$builder->build_query($source)};
+like($@, qr/unexpected "{"/, "$test : error : 2");
 

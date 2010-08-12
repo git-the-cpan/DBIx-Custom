@@ -9,6 +9,9 @@ use Carp 'croak';
 use DBIx::Custom::Query;
 use DBIx::Custom::QueryBuilder::TagProcessors;
 
+# Carp trust relationship
+push @DBIx::Custom::CARP_NOT, __PACKAGE__;
+
 __PACKAGE__->dual_attr('tag_processors', default => sub { {} }, inherit => 'hash_copy');
 __PACKAGE__->register_tag_processor(
     '?'     => \&DBIx::Custom::QueryBuilder::TagProcessors::expand_placeholder_tag,
@@ -23,9 +26,6 @@ __PACKAGE__->register_tag_processor(
     'insert_param' => \&DBIx::Custom::QueryBuilder::TagProcessors::expand_insert_param_tag,
     'update_param' => \&DBIx::Custom::QueryBuilder::TagProcessors::expand_update_param_tag
 );
-
-__PACKAGE__->attr(tag_start => '{');
-__PACKAGE__->attr(tag_end   => '}');
 
 sub register_tag_processor {
     my $self = shift;
@@ -56,51 +56,135 @@ sub _parse {
     $source ||= '';
 
     # Tree
-    my $tree = [];
+    my @tree;
     
-    # Start tag
-    my $tag_start = quotemeta $self->tag_start;
-    croak qq{tag_start must be a charactor}
-      if !$tag_start || length $tag_start == 1;
+    # Value
+    my $value = '';
     
-    # End tag
-    my $tag_end   = quotemeta $self->tag_end;
-    croak qq{tag_end must be a charactor}
-      if !$tag_end || length $tag_end == 1;
-    
-    # Tokenize
+    # State
     my $state = 'text';
     
-    # Save original source
-    my $original = $source;
+    # Before charactor
+    my $before = '';
+
+    # Position
+    my $pos;
     
     # Parse
-    while ($source =~ s/([^$tag_start]*?)$tag_start([^$tag_end].*?)$tag_end//sm) {
-        my $text = $1;
-        my $tag  = $2;
+    my $original = $source;
+    while (my $c = substr($source, 0, 1, '')) {
         
-        # Parse tree
-        push @$tree, {type => 'text', tag_args => [$text]} if $text;
-        
-        if ($tag) {
-            # Get tag name and arguments
-            my ($tag_name, @tag_args) = split /\s+/, $tag;
+        # State is text
+        if ($state eq 'text') {
             
-            # Tag processor not registered
-            croak qq{Tag "$tag_name" in "$original" is not registered}
-               unless $self->tag_processors->{$tag_name};
+            # Tag start charactor
+            if ($c eq '{') {
+                
+                # Escaped charactor
+                if ($before eq "\\") {
+                    substr($value, -1, 1, '');
+                    $value .= $c;
+                }
+                
+                # Tag start
+                else {
+                    
+                    # Change state
+                    $state = 'tag';
+                    
+                    # Add text
+                    push @tree, {type => 'text', value => $value}
+                      if $value;
+                    
+                    # Clear
+                    $value = '';
+                }
+            }
             
-            # Add tag to parsing tree
-            push @$tree, {type => 'tag', tag_name => $tag_name,
-                          tag_args => [@tag_args]};
+            # Tag end charactor
+            elsif ($c eq '}') {
+            
+                # Escaped charactor
+                if ($before eq "\\") {
+                    substr($value, -1, 1, '');
+                    $value .= $c;
+                }
+                
+                # Unexpected
+                else {
+                    croak qq/Parsing error. unexpected "}". / .
+                          qq/pos $pos of "$original"/;
+                }
+            }
+            
+            # Normal charactor
+            else { $value .= $c }
         }
+        
+        # State is tags
+        else {
+            
+            # Tag start charactor
+            if ($c eq '{') {
+            
+                # Escaped charactor
+                if ($before eq "\\") {
+                    substr($value, -1, 1, '');
+                    $value .= $c;
+                }
+                
+                # Unexpected
+                else {
+                    croak qq/Parsing error. unexpected "{". / .
+                          qq/pos $pos of "$original"/;
+                }
+            }
+            
+            # Tag end charactor
+            elsif ($c eq '}') {
+                
+                # Escaped charactor
+                if ($before eq "\\") {
+                    substr($value, -1, 1, '');
+                    $value .= $c;
+                }
+                
+                # Tag end
+                else {
+                
+                    # Change state
+                    $state = 'text';
+                    
+                    # Add tag
+                    my ($tag_name, @tag_args) = split /\s+/, $value;
+                    push @tree, {type => 'tag', tag_name => $tag_name, 
+                                 tag_args => \@tag_args};
+                    
+                    # Clear
+                    $value = '';
+                }
+            }
+            
+            # Normal charactor
+            else { $value .= $c }
+        }
+        
+        # Save before charactor
+        $before = $c;
+        
+        # increment position
+        $pos++;
     }
     
-    # Add text to parsing tree 
-    push @$tree, {type => 'text', tag_args => [$source]}
-      if $source;
+    # Tag not finished
+    croak qq{Tag not finished. "$original"}
+      if $state eq 'tag';
     
-    return $tree;
+    # Add rest text
+    push @tree, {type => 'text', value => $value}
+      if $value;
+    
+    return \@tree;
 }
 
 sub _build_query {
@@ -115,33 +199,31 @@ sub _build_query {
     # Build SQL 
     foreach my $node (@$tree) {
         
-        # Get type, tag name, and arguments
-        my $type     = $node->{type};
-        my $tag_name = $node->{tag_name};
-        my $tag_args = $node->{tag_args};
-        
         # Text
-        if ($type eq 'text') {
-            # Join text
-            $sql .= $tag_args->[0];
-        }
+        if ($node->{type} eq 'text') { $sql .= $node->{value} }
         
         # Tag
-        elsif ($type eq 'tag') {
+        else {
+            
+            # Tag name
+            my $tag_name = $node->{tag_name};
+            
+            # Tag arguments
+            my $tag_args = $node->{tag_args};
             
             # Get tag processor
             my $tag_processor = $self->tag_processors->{$tag_name};
+            
+            # Tag processor is not registered
+            croak qq{Tag "$tag_name" in "{a }" is not registered}
+              unless $tag_processor;
             
             # Tag processor not sub reference
             croak qq{Tag processor "$tag_name" must be sub reference}
               unless ref $tag_processor eq 'CODE';
             
             # Execute tag processor
-            my $r;
-            {
-                local $Carp::CarpLevel += 1;
-                $r = $tag_processor->(@$tag_args);
-            }
+            my $r = $tag_processor->(@$tag_args);
             
             # Check tag processor return value
             croak qq{Tag processor "$tag_name" must return [STRING, ARRAY_REFERENCE]}
@@ -208,22 +290,6 @@ DBIx::Custom::QueryBuilder - Query builder
 
 Tag processors.
 
-=head2 C<tag_start>
-    
-    my $tag_start = $builder->tag_start;
-    $builder      = $builder->tag_start('{');
-
-Tag start charactor.
-Default to '{'.
-
-=head2 C<tag_end>
-    
-    my $tag_end = $builder->tag_start;
-    $builder    = $builder->tag_start('}');
-
-Tag end charactor.
-Default to '}'.
-    
 =head1 METHODS
 
 L<DBIx::Custom::QueryBuilder> inherits all methods from L<Object::Simple>
@@ -235,6 +301,12 @@ and implements the following new ones.
 
 Create a new L<DBIx::Custom::Query> object from SQL source.
 SQL source contains tags, such as {= title}, {like author}.
+
+C<{> and C<}> is reserved. If you use these charactors,
+you must escape them using '\'. Note that '\' is
+already perl escaped charactor, so you must write '\\'. 
+
+    'select * from books \\{ something statement \\}'
 
 B<Example:>
 

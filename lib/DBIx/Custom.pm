@@ -339,10 +339,8 @@ sub create_query {
         my $builder = $self->query_builder;
         
         # Create query
-        {
-            local $Carp::CarpLevel += 1;
-            $query = $builder->build_query($source);
-        }
+        $query = $builder->build_query($source);
+
         # Cache query
         $self->cache_method->($self, $source,
                              {sql     => $query->sql, 
@@ -506,7 +504,7 @@ DBIx::Custom - DBI interface, having hash parameter binding and filtering system
 
 =cut
 
-our $VERSION = '0.1613';
+our $VERSION = '0.1614';
 
 =head1 STABILITY
 
@@ -898,11 +896,11 @@ The following tags is available.
 
 See also L<DBIx::Custom::QueryBuilder>.
 
-Default start tag is '{'. end tag is '}'.
-You can change this tag.
+C<{> and C<}> is reserved. If you use these charactors,
+you must escape them using '\'. Note that '\' is
+already perl escaped charactor, so you must write '\\'. 
 
-    $dbi->query_builder->start_tag('|');
-    $dbi->query_builder->end_tag('|');
+    'select * from books \\{ something statement \\}'
 
 =head2 6. Filtering
 
@@ -1117,8 +1115,6 @@ You can change Result class if you need.
 You can custamize SQL builder object
 
     my $dbi = DBIx::Custom->connect(...);
-    $dbi->query_builder->start_tag('|');
-    $dbi->query_builder->end_tag('|');
     $dbi->query_builder->register_tag_processor(
         name => sub {
            ...
