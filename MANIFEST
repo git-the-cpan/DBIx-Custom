@@ -1,7 +1,7 @@
-Build.PL
 Changes
 lib/DBIx/Custom.pm
 lib/DBIx/Custom/Guides.pod
+lib/DBIx/Custom/Guides/Ja.pod
 lib/DBIx/Custom/MySQL.pm
 lib/DBIx/Custom/Query.pm
 lib/DBIx/Custom/QueryBuilder.pm
