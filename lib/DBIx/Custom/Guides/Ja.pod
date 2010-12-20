@@ -38,21 +38,34 @@ C<connect()>メソッドを使用します。
     my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=dbname",
                                     user => 'ken', password => '!LFKD%$&');
 
-データベースがSQLiteであれば、代わりにL<DBIx::Custom::SQLite>を使うと
-データベースへの接続が簡単です。
+B<Data sourceのサンプル:>
 
-    use DBIx::Custom::SQLite;
-    my $dbi = DBIx::Custom::SQLite->connect(database => 'dbname');
+MySQL
 
-データベースがMySQLであれば、代わりにL<DBIx::Custom::MySQL>を使うと
-データベースへの接続が簡単です。
+    "dbi:mysql:database=$database"
+    "dbi:mysql:database=$database;host=$hostname;port=$port"
 
-    use DBIx::Custom::MySQL;
-    my $dbi = DBIx::Custom::MySQL->connect(
-        database => 'dbname',
-        user     => 'ken',
-        password => '!LFKD%$&'
-    );
+SQLite
+
+    "dbi:SQLite:dbname=$database"
+    "dbi:SQLite:dbname=:memory:"
+
+PostgreSQL
+
+    "dbi:Pg:dbname=$dbname"
+
+Oracle
+
+    "dbi:Oracle:$dbname"
+    "dbi:Oracle:host=$host;sid=$sid"
+
+ODBC(Microsoft Access)
+
+    "dbi:ODBC:driver=Microsoft Access Driver (*.mdb);dbq=hoge.mdb"
+
+ODBC(SQL Server)
+
+   "dbi:ODBC:driver={SQL Server};Server=(local);database=test;Trusted_Connection=yes;AutoTranslate=No;"
 
 L<DBIx::Custom>はL<DBI>のラッパです。
 L<DBI>オブジェクトはC<dbh>で取得することができます。
@@ -444,6 +457,52 @@ C<filter()>オプションで指定されたフィルタは、
 C<title>の値にはデフォルトのフィルタであるC<encode_utf8>が適用され
 C<author>の値にはC<to_upper_case>が適用されます。
 C<price>にはundefを設定しているのでフィルタが解除されます。
+
+B<フィルタのサンプル>
+
+MySQL
+
+    # Time::Piece object to DATETIME format
+    tp_to_datetime => sub {
+        return shift->strftime('%Y-%m-%d %H:%M:%S');
+    }
+    
+    # Time::Piece object to DATE format
+    tp_to_date => sub {
+        return shift->strftime('%Y-%m-%d');
+    }
+    
+    # DATETIME to Time::Piece object
+    datetime_to_tp => sub {
+        return Time::Piece->strptime(shift, '%Y-%m-%d %H:%M:%S');
+    }
+    
+    # DATE to Time::Piece object
+    date_to_tp => sub {
+        return Time::Piece->strptime(shift, '%Y-%m-%d');
+    }
+
+SQLite
+    
+    # Time::Piece object to DATETIME format
+    tp_to_datetime => sub {
+        return shift->strftime('%Y-%m-%d %H:%M:%S');
+    }
+    
+    # Time::Piece object to DATE format
+    tp_to_date => sub {
+        return shift->strftime('%Y-%m-%d');
+    }
+    
+    # DATETIME to Time::Piece object
+    datetime_to_tp => sub {
+        return Time::Piece->strptime(shift, $FORMATS->{db_datetime});
+    }
+    
+    # DATE to Time::Piece object
+    date_to_tp => sub {
+        return Time::Piece->strptime(shift, $FORMATS->{db_date});
+    }
 
 =head3 行のフェッチ時のフィルタリング
 

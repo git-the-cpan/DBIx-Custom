@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1621';
+our $VERSION = '0.1622';
 
 use 5.008001;
 use strict;
@@ -16,7 +16,7 @@ use DBIx::Custom::QueryBuilder;
 use Encode qw/encode_utf8 decode_utf8/;
 
 __PACKAGE__->attr([qw/data_source dbh default_bind_filter
-                      default_fetch_filter password user/]);
+                      dbi_options default_fetch_filter password user/]);
 
 __PACKAGE__->attr(cache => 1);
 __PACKAGE__->attr(cache_method => sub {
@@ -92,9 +92,15 @@ sub connect {
     
     # Information
     my $data_source = $self->data_source;
+    
+    croak qq{"data_source" must be specfied to connect method"}
+      unless $data_source;
+    
     my $user        = $self->user;
     my $password    = $self->password;
+    my $dbi_options = $self->dbi_options || {};
     
+    $DB::single = 1;
     
     # Connect
     my $dbh = eval {DBI->connect(
@@ -105,6 +111,7 @@ sub connect {
             RaiseError => 1,
             PrintError => 0,
             AutoCommit => 1,
+            %$dbi_options
         }
     )};
     
@@ -299,6 +306,19 @@ sub insert {
                                           filter => $filter);
     
     return $ret_val;
+}
+
+sub new {
+    my $self = shift->SUPER::new(@_);
+    
+    # Check attribute names
+    my @attrs = keys %$self;
+    foreach my $attr (@attrs) {
+        croak qq{"$attr" is invalid attribute name}
+          unless $self->can($attr);
+    }
+    
+    return $self;
 }
 
 sub register_filter {
@@ -719,6 +739,14 @@ C<connect()> method use this value to connect the database.
 
 L<DBI> object. You can call all methods of L<DBI>.
 
+=head2 C<dbi_options>
+
+    my $dbi_options = $dbi->dbi_options;
+    $dbi            = $dbi->dbi_options($dbi_options);
+
+DBI options.
+C<connect()> method use this value to connect the database.
+
 =head2 C<default_bind_filter>
 
     my $default_bind_filter = $dbi->default_bind_filter
@@ -943,6 +971,13 @@ B<Example:>
                  param  => {title => 'Perl', author => 'Taro'},
                  append => "some statement",
                  filter => {title => 'encode_utf8'})
+
+=head2 C<new>
+
+    my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=dbname",
+                                    user => 'ken', password => '!LFKD%$&');
+
+Create a new L<DBIx::Custom> object.
 
 =head2 C<register_filter>
 
