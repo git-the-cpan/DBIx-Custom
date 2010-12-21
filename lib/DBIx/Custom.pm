@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1622';
+our $VERSION = '0.1623';
 
 use 5.008001;
 use strict;
@@ -15,8 +15,8 @@ use DBIx::Custom::Query;
 use DBIx::Custom::QueryBuilder;
 use Encode qw/encode_utf8 decode_utf8/;
 
-__PACKAGE__->attr([qw/data_source dbh default_bind_filter
-                      dbi_options default_fetch_filter password user/]);
+__PACKAGE__->attr([qw/data_source dbh
+                      dbi_options password user/]);
 
 __PACKAGE__->attr(cache => 1);
 __PACKAGE__->attr(cache_method => sub {
@@ -74,6 +74,67 @@ sub AUTOLOAD {
     return $self->$helper(@_);
 }
 
+sub auto_filter {
+    my $self = shift;
+    
+    # Table
+    my $table = shift;
+    
+    # Column infomations
+    my @cs = @_;
+    
+    # Initialize filters
+    $self->{_auto_bind_filter} ||= {};
+    $self->{_auto_fetch_filter} ||= {};
+    
+    # Create auto filters
+    foreach my $c (@cs) {
+        croak "Usage \$dbi->auto_filter(" .
+              "TABLE, [COLUMN, BIND_FILTER, FETCH_FILTER], [...])"
+          unless ref $c eq 'ARRAY' && @$c == 3;
+        
+        # Column
+        my $column = $c->[0];
+        
+        # Bind filter
+        my $bind_filter  = $c->[1];
+        if (ref $bind_filter eq 'CODE') {
+	        $self->{_auto_bind_filter}{$table}{$column}
+	          = $bind_filter;
+	        $self->{_auto_bind_filter}{$table}{"$table.$column"}
+	          = $bind_filter;
+        }
+        else {
+	        croak qq{"$bind_filter" is not registered}
+	          unless exists $self->filters->{$bind_filter};
+	        
+	        $self->{_auto_bind_filter}{$table}{$column}
+	          = $self->filters->{$bind_filter};
+	        $self->{_auto_bind_filter}{$table}{"$table.$column"}
+	          = $self->filters->{$bind_filter};
+	    }
+        
+        # Fetch filter
+        my $fetch_filter = $c->[2];
+        if (ref $fetch_filter eq 'CODE') {
+	        $self->{_auto_fetch_filter}{$table}{$column}
+	          = $fetch_filter;
+	        $self->{_auto_fetch_filter}{$table}{"$table.$column"}
+	          = $fetch_filter;
+        }
+        else {
+            croak qq{"$fetch_filter" is not registered}
+              unless exists $self->filters->{$fetch_filter};
+            $self->{_auto_fetch_filter}{$table}{$column}
+              = $self->filters->{$fetch_filter};
+            $self->{_auto_fetch_filter}{$table}{"$table.$column"}
+              = $self->filters->{$fetch_filter};
+        }
+    }
+    
+    return $self;
+}
+
 sub helper {
     my $self = shift;
     
@@ -99,8 +160,6 @@ sub connect {
     my $user        = $self->user;
     my $password    = $self->password;
     my $dbi_options = $self->dbi_options || {};
-    
-    $DB::single = 1;
     
     # Connect
     my $dbh = eval {DBI->connect(
@@ -167,8 +226,42 @@ sub create_query {
     return $query;
 }
 
+sub default_bind_filter {
+    my $self = shift;
+    my $fname = $_[0];
+    
+    if (@_ && !$fname) {
+        $self->{_default_bind_filter} = undef;
+    }
+    else {
+        croak qq{"$fname" is not registered}
+          unless exists $self->filters->{$fname};
+    
+        $self->{_default_bind_filter} = $self->filters->{$fname};
+    }
+    
+    return $self;
+}
+
+sub default_fetch_filter {
+    my $self = shift;
+    my $fname = $_[0];
+    
+    if (@_ && !$fname) {
+        $self->{_default_fetch_filter} = undef;
+    }
+    else {
+        croak qq{"$fname" is not registered}
+          unless exists $self->filters->{$fname};
+    
+        $self->{_default_fetch_filter} = $self->filters->{$fname};
+    }
+    
+    return $self;
+}
+
 our %VALID_DELETE_ARGS
-  = map { $_ => 1 } qw/table where append filter allow_delete_all/;
+  = map { $_ => 1 } qw/auto_filter_table table where append filter allow_delete_all/;
 
 sub delete {
     my ($self, %args) = @_;
@@ -185,7 +278,12 @@ sub delete {
     my $append = $args{append};
     my $filter           = $args{filter};
     my $allow_delete_all = $args{allow_delete_all};
-    
+
+    my $auto_filter_table = exists $args{auto_filter_table}
+                          ? $args{auto_filter_table}
+                          : [$table];
+    $auto_filter_table ||= [];    
+
     # Where keys
     my @where_keys = keys %$where;
     
@@ -207,8 +305,9 @@ sub delete {
     $source .= " $append" if $append;
     
     # Execute query
-    my $ret_val = $self->execute($source, param  => $where, 
-                                 filter => $filter);
+    my $ret_val = $self->execute(
+        $source, param  => $where, filter => $filter,
+        auto_filter_table => $auto_filter_table);
     
     return $ret_val;
 }
@@ -217,7 +316,7 @@ sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
 sub DESTROY { }
 
-our %VALID_EXECUTE_ARGS = map { $_ => 1 } qw/param filter/;
+our %VALID_EXECUTE_ARGS = map { $_ => 1 } qw/param filter auto_filter_table/;
 
 sub execute{
     my ($self, $query, %args)  = @_;
@@ -234,7 +333,28 @@ sub execute{
     $query = $self->create_query($query)
       unless ref $query;
     
+    # Auto filter
+    my $auto_filter = {};
+    my $auto_filter_tables = $args{auto_filter_table} || [];
+    foreach my $table (@$auto_filter_tables) {
+        $auto_filter = {
+            %$auto_filter,
+            %{$self->{_auto_bind_filter}->{$table} || {}}
+        }
+    }
+    
+    # Filter
     my $filter = $args{filter} || $query->filter || {};
+    foreach my $column (keys %$filter) {
+        my $fname = $filter->{$column};
+        unless (ref $fname eq 'CODE') {
+          croak qq{"$fname" is not registered"}
+            unless exists $self->filters->{$fname};
+          
+          $filter->{$column} = $self->filters->{$fname};
+        }
+    }
+    $filter = {%$auto_filter, %$filter};
     
     # Create bind value
     my $bind_values = $self->_build_bind_values($query, $params, $filter);
@@ -248,12 +368,22 @@ sub execute{
     # Return resultset if select statement is executed
     if ($sth->{NUM_OF_FIELDS}) {
         
-        # Create result
-        my $result = $self->result_class->new(
+        # Auto fetch filter
+        my $auto_fetch_filter = {};
+	    foreach my $table (@$auto_filter_tables) {
+	        $auto_fetch_filter = {
+	            %$auto_filter,
+	            %{$self->{_auto_fetch_filter}{$table} || {}}
+	        }
+	    }
+	    
+		# Result
+		my $result = $self->result_class->new(
             sth            => $sth,
-            default_filter => $self->default_fetch_filter,
             filters        => $self->filters,
-            filter_check   => $self->filter_check
+            filter_check   => $self->filter_check,
+            _auto_filter   => $auto_fetch_filter || {},
+            _default_filter => $self->{_default_fetch_filter}
         );
 
         return $result;
@@ -276,8 +406,8 @@ sub expand {
     return %$expand;
 }
 
-our %VALID_INSERT_ARGS = map { $_ => 1 } qw/table param append filter/;
-
+our %VALID_INSERT_ARGS = map { $_ => 1 } qw/table param append
+                                            filter auto_filter_table/;
 sub insert {
     my ($self, %args) = @_;
 
@@ -293,6 +423,11 @@ sub insert {
     my $append = $args{append} || '';
     my $filter = $args{filter};
     
+    my $auto_filter_table = exists $args{auto_filter_table}
+                          ? $args{auto_filter_table}
+                          : [$table];
+    $auto_filter_table ||= [];
+    
     # Insert keys
     my @insert_keys = keys %$param;
     
@@ -302,8 +437,12 @@ sub insert {
     $source .= " $append" if $append;
     
     # Execute query
-    my $ret_val = $self->execute($source, param  => $param, 
-                                          filter => $filter);
+    my $ret_val = $self->execute(
+        $source,
+        param  => $param,
+        filter => $filter,
+        auto_filter_table => $auto_filter_table
+    );
     
     return $ret_val;
 }
@@ -332,7 +471,7 @@ sub register_filter {
 }
 
 our %VALID_SELECT_ARGS
-  = map { $_ => 1 } qw/table column where append relation filter param/;
+  = map { $_ => 1 } qw/auto_filter_table table column where append relation filter param/;
 
 sub select {
     my ($self, %args) = @_;
@@ -351,6 +490,10 @@ sub select {
     my $relation = $args{relation};
     my $append   = $args{append};
     my $filter   = $args{filter};
+
+    my $auto_filter_table = exists $args{auto_filter_table}
+                          ? $args{auto_filter_table}
+                          : $tables;
     
     # Source of SQL
     my $source = 'select ';
@@ -404,14 +547,16 @@ sub select {
     $source .= " $append" if $append;
     
     # Execute query
-    my $result = $self->execute($source, param  => $param, 
-                                         filter => $filter);
+    my $result = $self->execute(
+        $source, param  => $param, filter => $filter,
+        auto_filter_table => $auto_filter_table);    
     
     return $result;
 }
 
 our %VALID_UPDATE_ARGS
-  = map { $_ => 1 } qw/table param where append filter allow_update_all/;
+  = map { $_ => 1 } qw/auto_filter_table table param
+                       where append filter allow_update_all/;
 
 sub update {
     my ($self, %args) = @_;
@@ -429,6 +574,11 @@ sub update {
     my $append = $args{append} || '';
     my $filter           = $args{filter};
     my $allow_update_all = $args{allow_update_all};
+    
+    my $auto_filter_table = exists $args{auto_filter_table}
+                          ? $args{auto_filter_table}
+                          : [$table];
+    $auto_filter_table ||= [];
     
     # Update keys
     my @update_keys = keys %$param;
@@ -474,7 +624,8 @@ sub update {
     
     # Execute query
     my $ret_val = $self->execute($source, param  => $param, 
-                                 filter => $filter);
+                                 filter => $filter,
+                                 auto_filter_table => $auto_filter_table);
     
     return $ret_val;
 }
@@ -493,11 +644,6 @@ sub _build_bind_values {
     # Parameter
     $params ||= {};
     
-    # Check filter
-    $self->_check_filter($self->filters, $filter,
-                         $self->default_bind_filter, $params)
-      if $self->filter_check;
-    
     # Build bind values
     my $count = {};
     foreach my $column (@{$query->columns}) {
@@ -508,38 +654,15 @@ sub _build_bind_values {
                   : $params->{$column};
         
         # Filtering
-        my $fname = $filter->{$column} || $self->default_bind_filter || '';
-        my $filter_func = $fname ? $self->filters->{$fname} : undef;
-        push @bind_values, $filter_func
-                         ? $filter_func->($value)
-                         : $value;
+        my $f = $filter->{$column} || $self->{_default_bind_filter} || '';
+        
+        push @bind_values, $f ? $f->($value) : $value;
         
         # Count up 
         $count->{$column}++;
     }
     
     return \@bind_values;
-}
-
-sub _check_filter {
-    my ($self, $filters, $filter, $default_filter, $params) = @_;
-    
-    # Filter name not exists
-    foreach my $fname (values %$filter) {
-        croak qq{Bind filter "$fname" is not registered}
-          unless exists $filters->{$fname};
-    }
-    
-    # Default filter name not exists
-    croak qq{Default bind filter "$default_filter" is not registered}
-      if $default_filter && ! exists $filters->{$default_filter};
-    
-    # Column name not exists
-    foreach my $column (keys %$filter) {
-        
-        croak qq{Column name "$column" in bind filter is not found in paramters}
-          unless exists $params->{$column};
-    }
 }
 
 sub _croak {
@@ -647,10 +770,6 @@ Execute SQL
 
 Other features.
 
-    # Default filter
-    $dbi->default_bind_filter('encode_utf8');
-    $dbi->default_fetch_filter('decode_utf8');
-
     # Get DBI object
     my $dbh = $dbi->dbh;
 
@@ -747,18 +866,6 @@ L<DBI> object. You can call all methods of L<DBI>.
 DBI options.
 C<connect()> method use this value to connect the database.
 
-=head2 C<default_bind_filter>
-
-    my $default_bind_filter = $dbi->default_bind_filter
-    $dbi                    = $dbi->default_bind_filter('encode_utf8');
-
-Default filter when parameter binding is executed.
-
-=head2 C<default_fetch_filter>
-
-    my $default_fetch_filter = $dbi->default_fetch_filter;
-    $dbi                     = $dbi->default_fetch_filter('decode_utf8');
-
 Default filter when row is fetched.
 
 =head2 C<filters>
@@ -774,10 +881,8 @@ Filter functions.
     my $filter_check = $dbi->filter_check;
     $dbi             = $dbi->filter_check(0);
 
-Enable filter check. 
-Default to 1.
-This check maybe damege performance.
-If you require performance, set C<filter_check> attribute to 0.
+B<this attribute is now deprecated and has no mean
+because check is always done>. 
 
 =head2 C<password>
 
@@ -817,7 +922,33 @@ C<connect()> method use this value to connect the database.
 L<DBIx::Custom> inherits all methods from L<Object::Simple>
 and implements the following new ones.
 
-=head2 begin_work
+=head2 C<(experimental) auto_filter >
+
+    $dbi->auto_filter(
+        $table,
+        [$column1, $bind_filter1, $fetch_filter1],
+        [$column2, $bind_filter2, $fetch_filter2],
+        [...],
+    );
+
+C<auto_filter> is automatically filter for columns of table.
+This have effect C<insert>, C<update>, C<delete>. C<select>
+and L<DBIx::Custom::Result> object. but this has'nt C<execute> method.
+
+If you want to have effect <execute< method, use C<auto_filter_table>
+arguments.
+
+    $result = $dbi->execute(
+        "select * from table1 where {= key1} and {= key2};",
+         param => {key1 => 1, key2 => 2},
+         auto_filter_table => ['table1']
+    );
+    
+B<Example:>
+
+    $dbi->auto_filter('books', 'sale_date', 'to_date', 'date_to');
+
+=head2 C<begin_work>
 
     $dbi->begin_work;
 
@@ -827,7 +958,7 @@ This is same as L<DBI>'s C<begin_work>.
 L<DBIx::Custom> inherits all methods from L<Object::Simple>
 and implements the following new ones.
 
-=head2 commit
+=head2 C<commit>
 
     $dbi->commit;
 
@@ -856,6 +987,16 @@ use C<create_query()> method and execute it by C<execute()> method
 instead of suger methods.
 
     $dbi->execute($query, {author => 'Ken', title => '%Perl%'});
+
+=head2 C<(deprecated) default_bind_filter>
+
+    $dbi = $dbi->default_bind_filter($fname);
+
+Default filter when parameter binding is executed.
+
+=head2 C<(deprecated) default_fetch_filter>
+
+    $dbi = $dbi->default_fetch_filter($fname);
 
 =head2 C<execute>
 
@@ -991,10 +1132,6 @@ or arguments.
 
 =item *
 
-C<default_bind_filter>, C<default_fetch_filter>
-
-=item *
-
 C<filter> argument of C<insert()>, C<update()>,
 C<update_all()>, C<delete()>, C<delete_all()>, C<select()>
 methods
@@ -1032,7 +1169,7 @@ B<Example:>
         }
     );
 
-=head2 rollback
+=head2 C<rollback>
 
     $dbi->rollback;
 
