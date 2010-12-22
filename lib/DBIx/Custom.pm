@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1623';
+our $VERSION = '0.1624';
 
 use 5.008001;
 use strict;
@@ -77,62 +77,68 @@ sub AUTOLOAD {
 sub auto_filter {
     my $self = shift;
     
+    $self->{auto_filter} ||= {};
+    
     # Table
     my $table = shift;
     
-    # Column infomations
-    my @cs = @_;
-    
-    # Initialize filters
-    $self->{_auto_bind_filter} ||= {};
-    $self->{_auto_fetch_filter} ||= {};
-    
-    # Create auto filters
-    foreach my $c (@cs) {
-        croak "Usage \$dbi->auto_filter(" .
-              "TABLE, [COLUMN, BIND_FILTER, FETCH_FILTER], [...])"
-          unless ref $c eq 'ARRAY' && @$c == 3;
+    if (@_) {
+        # Column infomations
+        my @cs = @_;
         
-        # Column
-        my $column = $c->[0];
+        # Initialize filters
+        $self->{auto_filter}{bind} ||= {};
+        $self->{auto_filter}{fetch} ||= {};
         
-        # Bind filter
-        my $bind_filter  = $c->[1];
-        if (ref $bind_filter eq 'CODE') {
-	        $self->{_auto_bind_filter}{$table}{$column}
-	          = $bind_filter;
-	        $self->{_auto_bind_filter}{$table}{"$table.$column"}
-	          = $bind_filter;
+        # Create auto filters
+        foreach my $c (@cs) {
+            croak "Usage \$dbi->auto_filter(" .
+                  "TABLE, [COLUMN, BIND_FILTER, FETCH_FILTER], [...])"
+              unless ref $c eq 'ARRAY' && @$c == 3;
+            
+            # Column
+            my $column = $c->[0];
+            
+            # Bind filter
+            my $bind_filter  = $c->[1];
+            if (ref $bind_filter eq 'CODE') {
+    	        $self->{auto_filter}{bind}{$table}{$column}
+    	          = $bind_filter;
+    	        $self->{auto_filter}{bind}{$table}{"$table.$column"}
+    	          = $bind_filter;
+            }
+            else {
+    	        croak qq{"$bind_filter" is not registered}
+    	          unless exists $self->filters->{$bind_filter};
+    	        
+    	        $self->{auto_filter}{bind}{$table}{$column}
+    	          = $self->filters->{$bind_filter};
+    	        $self->{auto_filter}{bind}{$table}{"$table.$column"}
+    	          = $self->filters->{$bind_filter};
+    	    }
+            
+            # Fetch filter
+            my $fetch_filter = $c->[2];
+            if (ref $fetch_filter eq 'CODE') {
+    	        $self->{auto_filter}{fetch}{$table}{$column}
+    	          = $fetch_filter;
+    	        $self->{auto_filter}{fetch}{$table}{"$table.$column"}
+    	          = $fetch_filter;
+            }
+            else {
+                croak qq{"$fetch_filter" is not registered}
+                  unless exists $self->filters->{$fetch_filter};
+                $self->{auto_filter}{fetch}{$table}{$column}
+                  = $self->filters->{$fetch_filter};
+                $self->{auto_filter}{fetch}{$table}{"$table.$column"}
+                  = $self->filters->{$fetch_filter};
+            }
         }
-        else {
-	        croak qq{"$bind_filter" is not registered}
-	          unless exists $self->filters->{$bind_filter};
-	        
-	        $self->{_auto_bind_filter}{$table}{$column}
-	          = $self->filters->{$bind_filter};
-	        $self->{_auto_bind_filter}{$table}{"$table.$column"}
-	          = $self->filters->{$bind_filter};
-	    }
         
-        # Fetch filter
-        my $fetch_filter = $c->[2];
-        if (ref $fetch_filter eq 'CODE') {
-	        $self->{_auto_fetch_filter}{$table}{$column}
-	          = $fetch_filter;
-	        $self->{_auto_fetch_filter}{$table}{"$table.$column"}
-	          = $fetch_filter;
-        }
-        else {
-            croak qq{"$fetch_filter" is not registered}
-              unless exists $self->filters->{$fetch_filter};
-            $self->{_auto_fetch_filter}{$table}{$column}
-              = $self->filters->{$fetch_filter};
-            $self->{_auto_fetch_filter}{$table}{"$table.$column"}
-              = $self->filters->{$fetch_filter};
-        }
+        return $self;
     }
     
-    return $self;
+    return $self->{auto_filter};
 }
 
 sub helper {
@@ -228,36 +234,44 @@ sub create_query {
 
 sub default_bind_filter {
     my $self = shift;
-    my $fname = $_[0];
     
-    if (@_ && !$fname) {
-        $self->{_default_bind_filter} = undef;
+    if (@_) {
+        my $fname = $_[0];
+        
+        if (@_ && !$fname) {
+            $self->{default_bind_filter} = undef;
+        }
+        else {
+            croak qq{"$fname" is not registered}
+              unless exists $self->filters->{$fname};
+        
+            $self->{default_bind_filter} = $self->filters->{$fname};
+        }
+        return $self;
     }
-    else {
-        croak qq{"$fname" is not registered}
-          unless exists $self->filters->{$fname};
     
-        $self->{_default_bind_filter} = $self->filters->{$fname};
-    }
-    
-    return $self;
+    return $self->{default_bind_filter};
 }
 
 sub default_fetch_filter {
     my $self = shift;
     my $fname = $_[0];
     
-    if (@_ && !$fname) {
-        $self->{_default_fetch_filter} = undef;
+    if (@_) {
+        if (@_ && !$fname) {
+            $self->{default_fetch_filter} = undef;
+        }
+        else {
+            croak qq{"$fname" is not registered}
+              unless exists $self->filters->{$fname};
+        
+            $self->{default_fetch_filter} = $self->filters->{$fname};
+        }
+        
+        return $self;
     }
-    else {
-        croak qq{"$fname" is not registered}
-          unless exists $self->filters->{$fname};
     
-        $self->{_default_fetch_filter} = $self->filters->{$fname};
-    }
-    
-    return $self;
+    return $self->{default_fetch_filter}
 }
 
 our %VALID_DELETE_ARGS
@@ -339,7 +353,7 @@ sub execute{
     foreach my $table (@$auto_filter_tables) {
         $auto_filter = {
             %$auto_filter,
-            %{$self->{_auto_bind_filter}->{$table} || {}}
+            %{$self->{auto_filter}{bind}->{$table} || {}}
         }
     }
     
@@ -373,7 +387,7 @@ sub execute{
 	    foreach my $table (@$auto_filter_tables) {
 	        $auto_fetch_filter = {
 	            %$auto_filter,
-	            %{$self->{_auto_fetch_filter}{$table} || {}}
+	            %{$self->{auto_filter}{fetch}{$table} || {}}
 	        }
 	    }
 	    
@@ -382,8 +396,8 @@ sub execute{
             sth            => $sth,
             filters        => $self->filters,
             filter_check   => $self->filter_check,
-            _auto_filter   => $auto_fetch_filter || {},
-            _default_filter => $self->{_default_fetch_filter}
+            default_filter => $self->default_fetch_filter,
+            _auto_filter   => $auto_fetch_filter || {}
         );
 
         return $result;
@@ -445,6 +459,25 @@ sub insert {
     );
     
     return $ret_val;
+}
+
+sub iterate_all_columns {
+    my ($self, $cb) = @_;
+    
+    # Iterate all tables
+    my $sth_tables = $self->dbh->table_info;
+    while (my $table_info = $sth_tables->fetchrow_hashref) {
+        
+        # Table
+        my $table = $table_info->{TABLE_NAME};
+        
+        # Iterate all columns
+        my $sth_columns = $self->dbh->column_info(undef, undef, $table, '%');
+        while (my $column_info = $sth_columns->fetchrow_hashref) {
+            my $column = $column_info->{COLUMN_NAME};
+            $cb->($table, $column, $column_info);
+        }
+    }
 }
 
 sub new {
@@ -654,7 +687,7 @@ sub _build_bind_values {
                   : $params->{$column};
         
         # Filtering
-        my $f = $filter->{$column} || $self->{_default_bind_filter} || '';
+        my $f = $filter->{$column} || $self->{default_bind_filter} || '';
         
         push @bind_values, $f ? $f->($value) : $value;
         
@@ -990,12 +1023,14 @@ instead of suger methods.
 
 =head2 C<(deprecated) default_bind_filter>
 
-    $dbi = $dbi->default_bind_filter($fname);
+    my $default_bind_filter = $dbi->default_bind_filter;
+    $dbi                    = $dbi->default_bind_filter($fname);
 
 Default filter when parameter binding is executed.
 
 =head2 C<(deprecated) default_fetch_filter>
 
+    my $default_fetch_filter = $dbi->default_fetch_filter;
     $dbi = $dbi->default_fetch_filter($fname);
 
 =head2 C<execute>
@@ -1119,6 +1154,19 @@ B<Example:>
                                     user => 'ken', password => '!LFKD%$&');
 
 Create a new L<DBIx::Custom> object.
+
+=head2 C<(experimental) iterate_all_columns>
+
+    $dbi->iterate_all_columns(
+        sub {
+            my ($table, $column, $column_info) = @_;
+            
+            # do something;
+        }
+    );
+
+Iterate all columns of all tables. Argument is callback.
+You can do anything by callback.
 
 =head2 C<register_filter>
 
