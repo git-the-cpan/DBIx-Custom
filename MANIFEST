@@ -24,6 +24,7 @@ t/dbix-custom-query.t
 t/dbix-custom-querybuilder.t
 t/dbix-custom-result-sqlite.t
 t/dbix-custom-sqlite.t
+t/dbix-custom-transaction-manager.t
 t/pod-coverage.t
 t/pod.t
 META.yml                                 Module meta-data (added by MakeMaker)
