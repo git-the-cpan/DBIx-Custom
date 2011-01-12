@@ -9,27 +9,6 @@ use Carp 'croak';
 
 __PACKAGE__->attr([qw/filter_check filters sth/]);
 
-sub default_filter {
-    my $self = shift;
-    
-    if (@_) {
-        my $fname = $_[0];
-        if (@_ && !$fname) {
-            $self->{default_filter} = undef;
-        }
-        else {
-            croak qq{"$fname" is not registered}
-              unless exists $self->filters->{$fname};
-        
-            $self->{default_filter} = $self->filters->{$fname};
-        }
-        
-        return $self;
-    }
-    
-    return $self->{default_filter};
-}
-
 sub filter {
     my $self = shift;
     
@@ -46,7 +25,7 @@ sub filter {
             }
         }
         
-        $self->{filter} = $filter;
+        $self->{filter} = {%{$self->filter || {}}, %$filter};
         
         return $self;
     }
@@ -57,11 +36,8 @@ sub filter {
 sub fetch {
     my $self = shift;
     
-    # Filters
-    my $filters = $self->filters || {};
+    # Filter
     my $filter  = $self->{filter}  || {};
-    my $auto_filter = $self->{_auto_filter} || {};
-    $filter = {%$auto_filter, %$filter};
     
     # Fetch
     my @row = $self->{sth}->fetchrow_array;
@@ -115,11 +91,8 @@ sub fetch_first {
 sub fetch_hash {
     my $self = shift;
     
-    # Filters
-    my $filters = $self->filters || {};
+    # Filter
     my $filter  = $self->filter  || {};
-    my $auto_filter = $self->{_auto_filter} || {};
-    $filter = {%$auto_filter, %$filter};
     
     # Fetch
     my $row = $self->{sth}->fetchrow_arrayref;
@@ -208,6 +181,28 @@ sub fetch_multi {
     
     return unless @$rows;
     return $rows;
+}
+
+# Deprecated
+sub default_filter {
+    my $self = shift;
+    
+    if (@_) {
+        my $fname = $_[0];
+        if (@_ && !$fname) {
+            $self->{default_filter} = undef;
+        }
+        else {
+            croak qq{"$fname" is not registered}
+              unless exists $self->filters->{$fname};
+        
+            $self->{default_filter} = $self->filters->{$fname};
+        }
+        
+        return $self;
+    }
+    
+    return $self->{default_filter};
 }
 
 1;
@@ -301,13 +296,6 @@ Statement handle of L<DBI>.
 L<DBIx::Custom::Result> inherits all methods from L<Object::Simple>
 and implements the following new ones.
 
-=head2 C<(deprecated) default_filter>
-
-    my $default_filter = $result->default_filter;
-    $result = $result->default_filter($filter);
-
-Default filter when a row is fetched.
-
 =head2 C<fetch>
 
     my $row = $result->fetch;
@@ -362,5 +350,12 @@ Row count must be specified.
 
     $result    = $result->filter(title  => 'decode_utf8',
                                  author => 'decode_utf8');
+
+=head2 C<(deprecated) default_filter>
+
+    my $default_filter = $result->default_filter;
+    $result = $result->default_filter($filter);
+
+Default filter when a row is fetched.
 
 =cut
