@@ -62,7 +62,6 @@ my $insert_query;
 my $update_query;
 my $ret_val;
 my $infos;
-my $model;
 my $table;
 
 # Prepare table
@@ -749,27 +748,10 @@ is_deeply($infos,
     , $test
 );
 
-test 'model';
-{
-    package MyModel1;
-    
-    use base 'DBIx::Custom::Model';
-    
-    sub new {
-        my $self = shift->SUPER::new(@_);
-        
-        my $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
-        
-        $self->dbi($dbi);
-        
-        return $self;
-    }
-}
-$model = MyModel1->new;
-$model->dbi->execute($CREATE_TABLE->{0});
-$table = $model->table('table1');
-is($table, $model->table('table1'));
-is($table->model, $model);
+test 'table';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$table = $dbi->table('table1');
 $table->insert(param => {key1 => 1, key2 => 2});
 $table->insert(param => {key1 => 3, key2 => 4});
 $rows = $table->select->fetch_hash_all;
@@ -794,4 +776,74 @@ $table->delete_all;
 $rows = $table->select->fetch_hash_all;
 is_deeply($rows, [], "$test: delete_all");
 
+$dbi->dbh->do($CREATE_TABLE->{2});
+$dbi->table('table2', ppp => sub {
+    my $self = shift;
+    
+    return $self->name;
+});
+is($dbi->table('table2')->ppp, 'table2', "$test : helper");
 
+test 'limit';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 4});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 6});
+$dbi->query_builder->register_tag_processor(
+    limit => sub {
+        my ($count, $offset) = @_;
+        
+        my $s = '';
+        $s .= "limit $count";
+        $s .= " offset $offset" if defined $offset;
+        
+        return [$s, []];
+    }
+);
+$rows = $dbi->select(
+  table => 'table1',
+  where => {key1 => 1},
+  append => "order by key2 {limit 1 0}"
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2}], $test);
+$rows = $dbi->select(
+  table => 'table1',
+  where => {key1 => 1},
+  append => "order by key2 {limit 2 1}"
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 4},{key1 => 1, key2 => 6}], $test);
+$rows = $dbi->select(
+  table => 'table1',
+  where => {key1 => 1},
+  append => "order by key2 {limit 1}"
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2}], $test);
+
+test 'connect super';
+{
+    package MyDBI;
+    
+    use base 'DBIx::Custom';
+    sub connect {
+        my $self = shift->SUPER::connect(@_);
+        
+        return $self;
+    }
+    
+    sub new {
+        my $self = shift->SUPER::connect(@_);
+        
+        return $self;
+    }
+}
+
+$dbi = MyDBI->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1, $test);
+
+$dbi = MyDBI->new($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1, $test);
