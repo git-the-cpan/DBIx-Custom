@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               DBIx-Custom
-version:            0.1629
+version:            0.1630
 abstract:           DBI interface, having hash parameter binding and filtering system
 author:
     - Yuki Kimoto <kimoto.yuki@gmail.com>
@@ -13,7 +13,7 @@ build_requires:
 requires:
     DBD::SQLite:     1.25
     DBI:             1.605
-    Object::Simple:  3.0201
+    Object::Simple:  3.0616
     Test::More:      0
 no_index:
     directory:
