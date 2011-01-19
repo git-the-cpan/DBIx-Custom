@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1633';
+our $VERSION = '0.1634';
 
 use 5.008001;
 use strict;
@@ -686,7 +686,8 @@ sub update {
 
 sub update_all { shift->update(allow_update_all => 1, @_) };
 
-sub where { DBIx::Custom::Where->new }
+sub where { DBIx::Custom::Where->new(
+              query_builder => shift->query_builder) }
 
 sub _build_binds {
     my ($self, $params, $columns, $filter) = @_;
