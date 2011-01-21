@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1634';
+our $VERSION = '0.1635';
 
 use 5.008001;
 use strict;
@@ -254,6 +254,7 @@ sub delete {
     
     # Arguments
     my $table            = $args{table} || '';
+    croak qq{"table" option must be specified} unless $table;
     my $where            = $args{where} || {};
     my $append = $args{append};
     my $filter           = $args{filter};
@@ -402,7 +403,8 @@ sub insert {
     }
     
     # Arguments
-    my $table  = $args{table} || '';
+    my $table  = $args{table};
+    croak qq{"table" option must be specified} unless $table;
     my $param  = $args{param} || {};
     my $append = $args{append} || '';
     my $filter = $args{filter};
@@ -430,7 +432,7 @@ sub insert {
     return $ret_val;
 }
 
-sub iterate_all_columns {
+sub each_column {
     my ($self, $cb) = @_;
     
     # Iterate all tables
@@ -462,12 +464,6 @@ sub new {
     return $self;
 }
 
-sub or {
-    my $self = shift;
-    my $values = ref $_[0] eq 'ARRAY' ? $_[0] : [@_];
-    return DBIx::Custom::Or->new(values => $values);
-}
-
 sub register_filter {
     my $invocant = shift;
     
@@ -476,6 +472,10 @@ sub register_filter {
     $invocant->filters({%{$invocant->filters}, %$filters});
     
     return $invocant;
+}
+
+sub register_tag_processor {
+    return shift->query_builder->register_tag_processor(@_);
 }
 
 our %VALID_SELECT_ARGS
@@ -491,8 +491,11 @@ sub select {
     }
     
     # Arguments
-    my $tables = $args{table} || [];
-    $tables = [$tables] unless ref $tables eq 'ARRAY';
+    my $table = $args{table};
+    my $tables = ref $table eq 'ARRAY' ? $table
+               : defined $table ? [$table]
+               : [];
+    croak qq{"table" option must be specified} unless @$tables;
     my $columns  = $args{column} || [];
     my $where    = $args{where};
     my $relation = $args{relation};
@@ -624,6 +627,7 @@ sub update {
     
     # Arguments
     my $table            = $args{table} || '';
+    croak qq{"table" option must be specified} unless $table;
     my $param            = $args{param} || {};
     my $where            = $args{where} || {};
     my $append = $args{append} || '';
@@ -916,7 +920,15 @@ so all people learing database know it.
 If you already know SQL,
 you learn a little thing to use L<DBIx::Custom>.
 
-See L<DBIx::Custom::Guides> for more details.
+See L<DBIx::Custom::Guide> for more details.
+
+=head1 GUIDE
+
+L<DBIx::Custom::Guide> - L<DBIx::Custom> complete guide
+
+=head1 EXAMPLES
+
+L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki> - Many useful examples
 
 =head1 ATTRIBUTES
 
@@ -1197,25 +1209,24 @@ B<Example:>
 
 Create a new L<DBIx::Custom> object.
 
-=head2 C<(experimental) iterate_all_columns>
+=head2 C<(experimental) each_column>
 
-    $dbi->iterate_all_columns(
+    $dbi->each_column(
         sub {
-            my ($table, $column, $column_info) = @_;
+            my ($table, $column, $info) = @_;
             
-            # do something;
+            my $type = $info->{TYPE_NAME};
+            
+            if ($type eq 'DATE') {
+                # ...
+            }
         }
     );
-
-Iterate all columns of all tables. Argument is callback.
-You can do anything by callback.
-
-=head2 C<(experimental) or>
-
-    $or = $dbi->or(1, 5);
-
-Create L<DBIx::Custom::Or> object. This is used with select method's
-where option.
+Get column informations from database.
+Argument is callback.
+You can do anything in callback.
+Callback receive three arguments, table name, column name and column
+information.
 
 =head2 C<register_filter>
 
@@ -1265,6 +1276,16 @@ B<Example:>
             return Encode::decode('UTF-8', $value)
         }
     );
+
+=head2 C<register_tag_processor>
+
+    $dbi->register_tag_processor(
+        limit => sub {
+            ...;
+        }
+    );
+
+Register tag processor.
 
 =head2 C<rollback>
 

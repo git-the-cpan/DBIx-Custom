@@ -1,8 +1,8 @@
 =head1 NAME
 
-DBIx::Custom::Guides - DBIx::Custom Guides
+DBIx::Custom::Guide - DBIx::Custom Guides
 
-=head1 GUIDES
+=head1 GUIDE
 
 =head2 1. Connect to the database
 
@@ -355,50 +355,6 @@ This is overwrite applied filter.
 
 B<Filter examples>
 
-MySQL
-
-    # Time::Piece object to DATETIME format
-    tp_to_datetime => sub {
-        return shift->strftime('%Y-%m-%d %H:%M:%S');
-    }
-    
-    # Time::Piece object to DATE format
-    tp_to_date => sub {
-        return shift->strftime('%Y-%m-%d');
-    },
-    
-    # DATETIME to Time::Piece object
-    datetime_to_tp => sub {
-        return Time::Piece->strptime(shift, '%Y-%m-%d %H:%M:%S');
-    }
-    
-    # DATE to Time::Piece object
-    date_to_tp => sub {
-        return Time::Piece->strptime(shift, '%Y-%m-%d');
-    }
-
-SQLite
-    
-    # Time::Piece object to DATETIME format
-    tp_to_datetime => sub {
-        return shift->strftime('%Y-%m-%d %H:%M:%S');
-    }
-    
-    # Time::Piece object to DATE format
-    tp_to_date => sub {
-        return shift->strftime('%Y-%m-%d');
-    },
-    
-    # DATETIME to Time::Piece object
-    datetime_to_tp => sub {
-        return Time::Piece->strptime(shift, $FORMATS->{db_datetime});
-    }
-    
-    # DATE to Time::Piece object
-    date_to_tp => sub {
-        return Time::Piece->strptime(shift, $FORMATS->{db_date});
-    }
-
 =head2 6.Create table object
 
 You can create table object which have methods.
@@ -506,12 +462,12 @@ You can change Result class if you need.
     my $dbi = DBIx::Custom->connect(...);
     $dbi->result_class('Your::Result');
 
-=head3 Custamize query builder object
+=head3 Register tag processor
 
 You can custamize query builder object
 
     my $dbi = DBIx::Custom->connect(...);
-    $dbi->query_builder->register_tag_processor(
+    $dbi->register_tag_processor(
         name => sub {
            ...
         }
@@ -538,43 +494,8 @@ These method can be called from L<DBIx::Custom> object directory.
     $dbi->update_or_insert;
     $dbi->find_or_create;
 
-=head2 EXAMPLES
+=head1 EXAMPLES
 
-=head3 Limit clause
-
-    my $rows = $dbi->select(
-        table => 'table1',
-        where => {key1 => 1},
-        append => "order by key2 {limit 1 0}" # {limit COUNT OFFSET}
-    )->fetch_hash_all;
-
-SQLite
-
-    $dbi->query_builder->register_tag_processor(
-        limit => sub {
-            my ($count, $offset) = @_;
-            
-            my $s = '';
-            $s .= "limit $count";
-            $s .= " offset $offset" if defined $offset;
-            
-            return [$s, []];
-        }
-    );
-
-MySQL
-
-    $dbi->query_builder->register_tag_processor(
-        limit => sub {
-            my ($count, $offset) = @_;
-            
-            my $s = '';
-            $offset = 0 unless defined $offset;
-            $s .= "limit $offset";
-            $s .= ", $count";
-            
-            return [$s, []];
-        }
-    );
+L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki> - Many useful examples
 
 =cut

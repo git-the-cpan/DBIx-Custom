@@ -2,32 +2,162 @@
 
 =head1 NAME
 
-DBIx::Custom::Guides::Ja - DBIx::Customの日本語ガイド
+DBIx::Custom::Guide::Ja - DBIx::Customの日本語ガイド
 
 =head1 ガイド
 
 L<DBIx::Custom>はデータベースへのクエリの発行を簡単に行うための
 クラスです。L<DBIx::Class>やL<DBIx::Simple>と同じように
-L<DBI>のラッパクラスになっています。
+L<DBI>のラッパクラスになっています。L<DBIx::Class>よりも簡単に、
+L<DBIx::Simple>よりもはるかに柔軟なことを行うことができます。
 
 L<DBIx::Custom>はO/Rマッパーではありません。O/Rマッパーは
 便利ですが、O/Rマッパのたくさんの文法を覚える必要があります。
-また、O/Rマッパによって生成されたSQLは非効率なことがあり、
-生のSQLを発行しなければならないこともあります。
+また、O/Rマッパによって生成されたSQLは非効率なことがありますし、
+複雑なSQLを生成することができないので、
+生のSQLを発行しなければならない場合がたくさんあります。
 
-L<DBIx::Custom>はO/RマッパとL<DBI>の中間に位置するモジュールです。
-L<DBIx::Custom>は柔軟なハッシュパラメータバインディングとフィルタリング
-のシステムを提供します。またSQLを簡単に実行するための、
+L<DBIx::Custom>はO/Rマッパとは対照的な設計が行われています。
+L<DBIx::Custom>の主な目的は、SQLを尊重しつつ、L<DBI>だけでは
+とてもめんどうな作業を簡単にすることです。もしSQLについて
+多くの知識を持っているならば、L<DBIx::Custom>でそのまま
+活用することができます。
+
+L<DBIx::Custom>の仕組みを簡単に説明しておきましょう。
+L<DBIx::Custom>では、タグと呼ばれるものを
+SQLの中に埋め込むことができます。
+
+    select * from book where {= title} and {=author};
+
+{}で囲まれた部分がタグです。このSQLは実際に実行されるときには
+次のようにプレースホルダに展開されます。
+
+    select * from book where title = ? and author = ?;
+
+これらの展開にはどのような意味があるのでしょうかと質問
+されることかと思います。この簡単な仕組みの上に非常にたくさんの
+有用で便利で使いやすい機能が構築されます。それは以下のようなものです。
+
+=over 4
+
+=item 1. プレースホルダのパラメータをハッシュリファレンスで指定
+
+L<DBI>をそのまま使うのであればプレースホルダのパラメータは配列
+で指定する必要があります。
+
+    $sth->execute(@bind);
+
+L<DBIx::Custom>を利用するのであればハッシュリファレンスで指定すること
+できます。
+    
+    my $param = {title => 'Perl', author => 'Ken'};
+    $dbi->execute($sql, $param);
+
+=item 2. パラメータのフィルタリング
+
+たとえば、日付の列は、Perlで扱うときにはC<Time::Piece>などの日付オブジェクト
+で扱い、データベースに格納するときはデータベースの日付型に変換したい
+と思うのではないでしょうか。またデータベースから取り出すときは
+データベースの日付型から日付オブジェクトに変換したと思うのでは
+ないでしょうか。
+
+このようなときはフィルタ機能を使うことができます。
+
+まずフィルタを登録します。
+
+    $dbi->register_filter(
+        tp_to_date => sub {
+            ...
+        },
+        date_to_tp => sub {
+            ...
+        }
+    );
+
+次にテーブルの各列にこのフィルタを適用します。
+
+    $dbi->apply_filter('book',
+        'publish_date' => {out => 'tp_to_date', in => 'date_to_tp'}
+    );
+
+outはPerlからデータベースに保存する方向、inはデータベースからPerlに取得する方向です。
+
+SQLを発行するときにテーブルの指定を行えば、自動的にこのフィルタが適用されます。
+
+    $dbi->execute($sql, $param, table => 'book');
+
+=item 3. 選択的な検索条件
+
+生のDBIを利用しているとき一番たいへんなのは選択的な検索条件を作成したいときです。
+
+たとえば、検索条件にtitleとauthorが指定された場合は次のSQLを
+
+    select * from book where title = ? and author = ?;
+
+titleだけの場合は次のSQLを
+
+    select * from book where title = ?;
+    
+authorだけの場合は次のSQLを発行した場合を考えましょう。
+
+    select * from book where author = ?;
+
+これはとても大変な作業なので、通常はL<SQL::Abstract>を動的に生成してくれる
+モジュールを利用することになります。
+
+L<DBIx::Custom>はさらに簡単で便利な方法を用意しています。
+
+    my $where = $dbi->where;
+    $where->param({title => 'Perl'});
+    $where->clause(
+        ['and', '{= title}', {'= author'}]
+    );
+
+    my $sql = "select * from book $where";
+
+詳しい説明は後ほど行いますが、上記のように記述すれば、
+L<DBIx::Custom>では選択的な検索条件を持つWhere句を生成することができます。
+検索条件が入れ子になった構造やorについても対応しています。
+
+=item 4. 挿入、更新、削除、選択を行うためのメソッド
+
+L<DBIx::Custom>ではSQLをさらに簡単に実行するための
+メソッドも提供しています。
 C<insert()>, C<update()>, C<delete()>,C<select()>などの
-シュガーメソッドも提供します。
+シュガーメソッドを使って、挿入、更新、削除、選択という操作を行うことが
+できます。
 
-L<DBIx::Custom>はSQLを尊重します。SQLはとても複雑で、美しくはありません。
-けれども、SQLはデファクトスタンダードな技術です。
-ですので、データベースを学ぶすべての人はSQLを知っています。
-あなたがすでにSQLを知っているなら、L<DBIx::Custom>を使って
-何かを行うために覚えることはとても少ないです。
+    my $param = {title => 'Perl', author => 'Ken'};
+    $dbi->insert(table => 'book', param => $param);
 
-では使い方を解説します。
+=item 5. テーブル単位の操作の登録
+
+テーブルに対して操作を登録することができます。これによって
+テーブル名を繰り返し指定する必要がなくなり、ソースコードの
+見通しが良くなります。
+
+    $dbi->talbe('book',
+        list => sub {
+            ...
+        },
+        list_somethin => sub {
+            
+        }
+    );
+
+登録したメソッドはそのまま利用することができます。
+
+    $dbi->table('book')->list;
+
+通常O/Rマッパはテーブルに対応するクラスを作成しなければ
+ならないことが多いですが、L<DBIx::Custom>ではこの作業を簡便に
+しており、上記のように登録することができます。
+
+=back
+
+L<DBIx::Custom>はL<DBI>を補うとても便利なモジュールです。
+興味をもたれた方は、この後で詳しい解説を行いますので、
+ご覧になってみてください。
 
 =head2 1. データベースへの接続
 
@@ -477,12 +607,12 @@ SQLite
     
     # DATETIME to Time::Piece object
     datetime_to_tp => sub {
-        return Time::Piece->strptime(shift, $FORMATS->{db_datetime});
+        return Time::Piece->strptime(shift, '%Y-%m-%d %H:%M:%S');
     }
     
     # DATE to Time::Piece object
     date_to_tp => sub {
-        return Time::Piece->strptime(shift, $FORMATS->{db_date});
+        return Time::Piece->strptime(shift, '%Y-%m-%d');
     }
 
 =head3 行のフェッチ時のフィルタリング
