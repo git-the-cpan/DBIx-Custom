@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1637';
+our $VERSION = '0.1638';
 
 use 5.008001;
 use strict;
@@ -14,15 +14,16 @@ use DBIx::Custom::Result;
 use DBIx::Custom::Query;
 use DBIx::Custom::QueryBuilder;
 use DBIx::Custom::Where;
+use DBIx::Custom::Table;
 use Encode qw/encode_utf8 decode_utf8/;
 
 __PACKAGE__->attr(
     [qw/data_source dbh password user/],
     cache => 1,
-    dbi_option => sub { {} },
+    dbi_option    => sub { {} },
     query_builder => sub { DBIx::Custom::QueryBuilder->new },
     result_class  => 'DBIx::Custom::Result',
-    table_class   => 'DBIx::Custom::Table'
+    base_table    => sub { DBIx::Custom::Table->new(dbi => shift) }
 );
 
 __PACKAGE__->attr(
@@ -69,16 +70,15 @@ our $AUTOLOAD;
 sub AUTOLOAD {
     my $self = shift;
 
+    # Method name
+    my ($package, $mname) = $AUTOLOAD =~ /^([\w\:]+)\:\:(\w+)$/;
+
     # Method
-    my ($package, $method) = $AUTOLOAD =~ /^([\w\:]+)\:\:(\w+)$/;
-
-    # Helper
-    $self->{_helpers} ||= {};
-    croak qq/Can't locate object method "$method" via "$package"/
-      unless my $helper = $self->{_helpers}->{$method};
-
-    # Run
-    return $self->$helper(@_);
+    $self->{_methods} ||= {};
+    croak qq/Can't locate object method "$mname" via "$package"/
+      unless my $method = $self->{_methods}->{$mname};
+    
+    return $self->$method(@_);
 }
 
 sub apply_filter {
@@ -145,12 +145,12 @@ sub apply_filter {
     return $self;
 }
 
-sub helper {
+sub method {
     my $self = shift;
     
     # Merge
-    my $helpers = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_helpers} = {%{$self->{_helpers} || {}}, %$helpers};
+    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
     
     return $self;
 }
@@ -570,22 +570,30 @@ sub table {
     my $self = shift;
     my $name = shift;
     
-    # Table class
-    my $table_class = $self->table_class;
-    croak qq{Invalid table class name "$table_class"}
-      unless $table_class =~ /^[\w:]+$/;
-    unless ($table_class->can('isa')) {
-        eval "require $table_class";
-        croak $@ if $@;
-    }
     # Create table
     $self->{_tables} ||= {};
-    $self->{_tables}->{$name}
-        = $table_class->new(name => $name, dbi => $self)
-      unless defined $self->{_tables}->{$name};
-    
-    # Helper
-    $self->{_tables}->{$name}->helper(@_) if @_;
+    unless (defined $self->{_tables}->{$name}) {
+        # Base table
+        my $base_table = $self->base_table;
+        
+        # Base methods
+        my $bmethods = ref $base_table->{_methods} eq 'HASH'
+                     ? $base_table->{_methods}
+                     : {};
+        
+        # Copy Methods
+        my $methods = {};
+        $methods->{$_} = $bmethods->{$_} for keys %$bmethods;
+        
+        # Create table
+        my $table = $base_table->new(
+            dbi      => $self,
+            name     => $name,
+            base     => $base_table,
+            _methods => $methods
+        );
+        $self->{_tables}->{$name} = $table;
+    }
     
     return $self->{_tables}{$name};
 }
@@ -1077,9 +1085,9 @@ Arguments is same as C<delete> method,
 except that C<delete_all> don't have C<where> argument.
 Return value of C<delete_all()> is the count of affected rows.
 
-=head2 C<(experimental) helper>
+=head2 C<(experimental) method>
 
-    $dbi->helper(
+    $dbi->method(
         update_or_insert => sub {
             my $self = shift;
             # do something
@@ -1090,7 +1098,7 @@ Return value of C<delete_all()> is the count of affected rows.
         }
     );
 
-Register helper methods. These method is called from L<DBIx::Custom> object directory.
+Register method. These method is called from L<DBIx::Custom> object directory.
 
     $dbi->update_or_insert;
     $dbi->find_or_create;
@@ -1246,7 +1254,7 @@ Return value of C<update()> is the count of affected rows.
 
 =head2 C<(experimental) table>
 
-    $dbi->table('book',
+    $dbi->table('book')->method(
         insert => sub { ... },
         update => sub { ... }
     );

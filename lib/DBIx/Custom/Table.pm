@@ -10,31 +10,34 @@ use Carp 'croak';
 # Carp trust relationship
 push @DBIx::Custom::CARP_NOT, __PACKAGE__;
 
-__PACKAGE__->attr(['dbi', 'name']);
+__PACKAGE__->attr(['dbi', 'name', 'base']);
 
 our $AUTOLOAD;
 
 sub AUTOLOAD {
     my $self = shift;
 
+    # Method name
+    my ($package, $mname) = $AUTOLOAD =~ /^([\w\:]+)\:\:(\w+)$/;
+
     # Method
-    my ($package, $method) = $AUTOLOAD =~ /^([\w\:]+)\:\:(\w+)$/;
-
-    # Helper
-    $self->{_helpers} ||= {};
-    croak qq/Can't locate object method "$method" via "$package"/
-      unless my $helper = $self->{_helpers}->{$method};
-
-    # Run
-    return $self->$helper(@_);
+    $self->{_methods} ||= {};
+    
+    # Method
+    if (my $method = $self->{_methods}->{$mname}) {
+        return $self->$method(@_)
+    }
+    
+    # DBI method
+    return $self->dbi->$mname(@_);
 }
 
-sub helper {
+sub method {
     my $self = shift;
     
     # Merge
-    my $helpers = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_helpers} = {%{$self->{_helpers} || {}}, %$helpers};
+    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
     
     return $self;
 }
@@ -45,7 +48,7 @@ sub new {
     # Methods
     my @methods = qw/insert update update_all delete delete_all select/;
     foreach my $method (@methods) {
-        $self->helper(
+        $self->method(
             $method => sub {
                 my $self = shift;
                 return $self->dbi->$method(table => $self->name, @_);
@@ -72,52 +75,43 @@ my $table = DBIx::Custom::Table->new(name => 'books');
 
 =head1 METHODS
 
-L<DBIx::Custom> inherits all methods from L<Object::Simple>
+L<DBIx::Custom> inherits all methods from L<Object::Simple>,
+and you can use all methods of the object set to C<dbi>.
 and implements the following new ones.
 
 =head2 C<delete>
 
-    $table->delete(where => \%where);
+    $table->delete(...);
     
 Same as C<delete()> of L<DBIx::Custom> except that
-you don't have to specify table name.
+you don't have to specify C<table> option.
 
 =head2 C<delete_all>
 
-    $table->delete_all(param => $param);
+    $table->delete_all(...);
     
 Same as C<delete_all()> of L<DBIx::Custom> except that
-you don't have to specify table name.
-
-=head2 C<helper>
-
-    $table->helper(insert => sub {
-        my $self = shift;
-        
-        return $self->dbi->insert(table => $self->name, @_);
-    });
-    
-Add helper method to a L<DBIx::Custom::Table> object.
-
-=head2 C<insert>
-
-    $table->insert(param => \%param);
-    
-Same as C<insert()> of L<DBIx::Custom> except that
-you don't have to specify table name.
+you don't have to specify C<table> option.
 
 =head2 C<method>
 
     $table->method(
-        select_complex => sub {
+        count => sub {
             my $self = shift;
-            
-            return $self->dbi->select($self->name, ...);
-        },
-        some_method => sub { ... }
+        
+            return $self->select(column => 'count(*)', @_)
+                        ->fetch_first->[0];
+        }
     );
+    
+Add method to a L<DBIx::Custom::Table> object.
 
-Define method.
+=head2 C<insert>
+
+    $table->insert(...);
+    
+Same as C<insert()> of L<DBIx::Custom> except that
+you don't have to specify C<table> option.
 
 =head2 C<new>
 
@@ -127,17 +121,17 @@ Create a L<DBIx::Custom::Table> object.
 
 =head2 C<select>
 
-    $table->select(param => $param);
+    $table->select(...);
     
 Same as C<select()> of L<DBIx::Custom> except that
-you don't have to specify table name.
+you don't have to specify C<table> option.
 
 =head2 C<update>
 
-    $table->update(param => \%param, where => \%where);
+    $table->update(...);
     
 Same as C<update()> of L<DBIx::Custom> except that
-you don't have to specify table name.
+you don't have to specify C<table> option.
 
 =head2 C<update_all>
 

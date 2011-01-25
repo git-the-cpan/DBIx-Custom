@@ -16,7 +16,7 @@ BEGIN {
 }
 
 # Function for test name
-sub test { "# $_[0]\n" }
+sub test { print "# $_[0]\n" }
 
 # Constant varialbes for test
 my $CREATE_TABLE = {
@@ -525,15 +525,15 @@ ok($@, "exception");
 $dbi->dbh->{AutoCommit} = 1;
 
 
-test 'helper';
+test 'method';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
-$dbi->helper(
+$dbi->method(
     one => sub { 1 }
 );
-$dbi->helper(
+$dbi->method(
     two => sub { 2 }
 );
-$dbi->helper({
+$dbi->method({
     twice => sub {
         my $self = shift;
         return $_[0] * 2;
@@ -697,19 +697,23 @@ $rows = $table->select->fetch_hash_all;
 is_deeply($rows, [], "delete_all");
 
 $dbi->dbh->do($CREATE_TABLE->{2});
-$dbi->table('table2', ppp => sub {
-    my $self = shift;
+$dbi->table('table2')->method(
+    ppp => sub {
+        my $self = shift;
     
-    return $self->name;
-});
-is($dbi->table('table2')->ppp, 'table2', "helper");
+        return $self->name;
+    }
+);
+is($dbi->table('table2')->ppp, 'table2', "method");
 
-$dbi->table('table2', {qqq => sub {
-    my $self = shift;
+$dbi->table('table2')->method({
+    qqq => sub {
+        my $self = shift;
     
-    return $self->name;
-}});
-is($dbi->table('table2')->qqq, 'table2', "helper");
+        return $self->name;
+    }
+});
+is($dbi->table('table2')->qqq, 'table2', "method");
 
 
 test 'limit';
@@ -999,7 +1003,7 @@ eval {$dbi->apply_filter('table1', 'key2', {out => 'no'})};
 like($@, qr/not registered/);
 eval {$dbi->apply_filter('table1', 'key2', {in => 'no'})};
 like($@, qr/not registered/);
-$dbi->helper({one => sub { 1 }});
+$dbi->method({one => sub { 1 }});
 is($dbi->one, 1);
 
 eval{DBIx::Custom->connect()};
@@ -1015,13 +1019,7 @@ is_deeply($row, {key1 => 2, key2 => 2});
 eval {$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2},
              filter => {key1 => 'no'}) };
 like($@, qr//);
-$dbi->table_class('!!!!');
-eval {$dbi->table};
-like($@, qr/Invalid table/);
 
-$dbi->table_class('NOTEXIST');
-eval {$dbi->table};
-ok($@);
 $dbi->register_filter(one => sub { });
 $dbi->default_fetch_filter('one');
 ok($dbi->default_fetch_filter);
@@ -1063,3 +1061,38 @@ $dbi = DBIx::Custom->connect(data_source => 'dbi:SQLite:dbname=:memory:',
                              dbi_options => {PrintError => 1});
 ok($dbi->dbh->{PrintError});
 
+test 'DBIx::Custom::Result stash()';
+$result = DBIx::Custom::Result->new;
+is_deeply($result->stash, {}, 'default');
+$result->stash->{foo} = 1;
+is($result->stash->{foo}, 1, 'get and set');
+
+test 'base_table';
+$dbi = DBIx::Custom->new;
+$dbi->base_table->method(
+    one => sub { 1 }
+);
+$table = $dbi->table('book');
+$table->method(
+    two => sub { 2 }
+);
+is($dbi->base_table->one, 1, 'method');
+is($table->one, 1, 'inherit method');
+is($table->two, 2, 'child table method');
+eval {$dbi->base_table->two};
+ok($@);
+
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$result = $dbi->base_table->execute("select * from table1");
+is_deeply($result->fetch_hash_all, [{key1 => 1, key2 => 2}], 'dbi method from base_table');
+$result = $dbi->table('table1')->execute("select * from table1");
+is_deeply($result->fetch_hash_all, [{key1 => 1, key2 => 2}], 'dbi method from table');
+
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->method(
+    one => sub { 1 }
+);
+is($dbi->base_table->one, 1, 'use dbi method');
+is($dbi->table('table1')->one, 1, 'use dbi method');
