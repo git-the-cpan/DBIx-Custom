@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1638';
+our $VERSION = '0.1639';
 
 use 5.008001;
 use strict;
@@ -15,6 +15,7 @@ use DBIx::Custom::Query;
 use DBIx::Custom::QueryBuilder;
 use DBIx::Custom::Where;
 use DBIx::Custom::Table;
+use DBIx::Custom::Tag;
 use Encode qw/encode_utf8 decode_utf8/;
 
 __PACKAGE__->attr(
@@ -156,7 +157,7 @@ sub method {
 }
 
 sub connect {
-    my $self = ref $_[0] ? shift : shift->SUPER::new(@_);;
+    my $self = ref $_[0] ? shift : shift->new(@_);;
     
     # Attributes
     my $data_source = $self->data_source;
@@ -251,24 +252,27 @@ sub delete {
     my $filter           = $args{filter};
     my $allow_delete_all = $args{allow_delete_all};
 
-    # Where keys
-    my @where_keys = keys %$where;
-    
-    # Not exists where keys
-    croak qq{"where" argument must be specified and } .
-          qq{contains the pairs of column name and value}
-      if !@where_keys && !$allow_delete_all;
-    
-    # Where clause
-    my $where_clause = '';
-    if (@where_keys) {
-        $where_clause = 'where ';
-        $where_clause .= "{= $_} and " for @where_keys;
-        $where_clause =~ s/ and $//;
+    # Where
+    my $w;
+    if (ref $where eq 'HASH') {
+        my $clause = ['and'];
+        push @$clause, "{= $_}" for keys %$where;
+        $w = $self->where;
+        $w->clause($clause);
+        $w->param($where);
     }
+    else { $w = $where }
     
+    croak qq{"where" must be hash refernce or DBIx::Custom::Where object}
+      unless ref $w eq 'DBIx::Custom::Where';
+    
+    $where = $w->param;
+    
+    croak qq{"where" must be specified}
+      if "$w" eq '' && !$allow_delete_all;
+
     # Source of SQL
-    my $source = "delete from $table $where_clause";
+    my $source = "delete from $table $w";
     $source .= " $append" if $append;
     
     # Create query
@@ -332,13 +336,13 @@ sub execute{
     }
     $filter = {%$filter, %$f};
     
-    # Create bind values
-    my $binds = $self->_build_binds($params, $query->columns, $filter);
+    # Bind
+    my $bind = $self->_bind($params, $query->columns, $filter);
     
     # Execute
-    my $sth      = $query->sth;
+    my $sth = $query->sth;
     my $affected;
-    eval {$affected = $sth->execute(@$binds)};
+    eval {$affected = $sth->execute(@$bind)};
     $self->_croak($@, qq{. Following SQL is executed. "$query->{sql}"}) if $@;
     
     # Return resultset if select statement is executed
@@ -451,9 +455,25 @@ sub new {
         croak qq{"$attr" is invalid attribute name}
           unless $self->can($attr);
     }
+
+    $self->register_tag(
+        '?'     => \&DBIx::Custom::Tag::placeholder,
+        '='     => \&DBIx::Custom::Tag::equal,
+        '<>'    => \&DBIx::Custom::Tag::not_equal,
+        '>'     => \&DBIx::Custom::Tag::greater_than,
+        '<'     => \&DBIx::Custom::Tag::lower_than,
+        '>='    => \&DBIx::Custom::Tag::greater_than_equal,
+        '<='    => \&DBIx::Custom::Tag::lower_than_equal,
+        'like'  => \&DBIx::Custom::Tag::like,
+        'in'    => \&DBIx::Custom::Tag::in,
+        'insert_param' => \&DBIx::Custom::Tag::insert_param,
+        'update_param' => \&DBIx::Custom::Tag::update_param
+    );
     
     return $self;
 }
+
+sub not_exists { bless {}, 'DBIx::Custom::NotExists' }
 
 sub register_filter {
     my $invocant = shift;
@@ -623,33 +643,34 @@ sub update {
     # Update keys
     my @update_keys = keys %$param;
     
-    # Where keys
-    my @where_keys = keys %$where;
-    
-    # Not exists where keys
-    croak qq{"where" argument must be specified and } .
-          qq{contains the pairs of column name and value}
-      if !@where_keys && !$allow_update_all;
-    
     # Update clause
     my $update_clause = '{update_param ' . join(' ', @update_keys) . '}';
-    
-    # Where clause
-    my $where_clause = '';
-    my $new_where = {};
-    
-    if (@where_keys) {
-        $where_clause = 'where ';
-        $where_clause .= "{= $_} and " for @where_keys;
-        $where_clause =~ s/ and $//;
+
+    # Where
+    my $w;
+    if (ref $where eq 'HASH') {
+        my $clause = ['and'];
+        push @$clause, "{= $_}" for keys %$where;
+        $w = $self->where;
+        $w->clause($clause);
+        $w->param($where);
     }
+    else { $w = $where }
+    
+    croak qq{"where" must be hash refernce or DBIx::Custom::Where object}
+      unless ref $w eq 'DBIx::Custom::Where';
+    
+    $where = $w->param;
+    
+    croak qq{"where" must be specified}
+      if "$w" eq '' && !$allow_update_all;
     
     # Source of SQL
-    my $source = "update $table $update_clause $where_clause";
+    my $source = "update $table $update_clause $w";
     $source .= " $append" if $append;
     
     # Rearrange parameters
-    foreach my $wkey (@where_keys) {
+    foreach my $wkey (keys %$where) {
         
         if (exists $param->{$wkey}) {
             $param->{$wkey} = [$param->{$wkey}]
@@ -676,34 +697,51 @@ sub update {
 
 sub update_all { shift->update(allow_update_all => 1, @_) };
 
-sub where { DBIx::Custom::Where->new(
-              query_builder => shift->query_builder) }
+sub where {
+    return DBIx::Custom::Where->new(query_builder => shift->query_builder)
+}
 
-sub _build_binds {
+sub _bind {
     my ($self, $params, $columns, $filter) = @_;
     
     # bind values
-    my @binds;
+    my @bind;
     
     # Build bind values
     my $count = {};
+    my $not_exists = {};
     foreach my $column (@$columns) {
         
         # Value
-        my $value = ref $params->{$column} eq 'ARRAY'
-                  ? $params->{$column}->[$count->{$column} || 0]
-                  : $params->{$column};
+        my $value;
+        if(ref $params->{$column} eq 'ARRAY') {
+            my $i = $count->{$column} || 0;
+            $i += $not_exists->{$column} || 0;
+            my $found;
+            for (my $k = $i; $i < @{$params->{$column}}; $k++) {
+                if (ref $params->{$column}->[$k] eq 'DBIx::Custom::NotExists') {
+                    $not_exists->{$column}++;
+                }
+                else  {
+                    $value = $params->{$column}->[$k];
+                    $found = 1;
+                    last
+                }
+            }
+            next unless $found;
+        }
+        else { $value = $params->{$column} }
         
         # Filter
         my $f = $filter->{$column} || $self->{default_out_filter} || '';
         
-        push @binds, $f ? $f->($value) : $value;
+        push @bind, $f ? $f->($value) : $value;
         
         # Count up 
         $count->{$column}++;
     }
     
-    return \@binds;
+    return \@bind;
 }
 
 sub _croak {
@@ -725,12 +763,13 @@ sub _croak {
     }
 }
 
-# Following methos are DEPRECATED!
+# DEPRECATED!
 __PACKAGE__->attr(
     dbi_options => sub { {} },
     filter_check  => 1
 );
 
+# DEPRECATED!
 sub default_bind_filter {
     my $self = shift;
     
@@ -752,6 +791,7 @@ sub default_bind_filter {
     return $self->{default_out_filter};
 }
 
+# DEPRECATED!
 sub default_fetch_filter {
     my $self = shift;
     
@@ -774,6 +814,7 @@ sub default_fetch_filter {
     return $self->{default_in_filter};
 }
 
+# DEPRECATED!
 sub register_tag_processor {
     return shift->query_builder->register_tag_processor(@_);
 }
@@ -924,14 +965,6 @@ Default filter when row is fetched.
     my $filters = $dbi->filters;
     $dbi        = $dbi->filters(\%filters);
 
-=head2 C<filter_check>
-
-    my $filter_check = $dbi->filter_check;
-    $dbi             = $dbi->filter_check(0);
-
-B<this attribute is now deprecated and has no mean
-because check is always done>. 
-
 =head2 C<password>
 
     my $password = $dbi->password;
@@ -970,7 +1003,7 @@ C<connect()> method use this value to connect the database.
 L<DBIx::Custom> inherits all methods from L<Object::Simple>
 and implements the following new ones.
 
-=head2 C<(experimental) apply_filter >
+=head2 C<(experimental) apply_filter>
 
     $dbi->apply_filter(
         $table,
@@ -1056,8 +1089,6 @@ is expanded to
 
 This is used in C<select()>
 
-
-    
 =head2 C<delete>
 
     $dbi->delete(table  => $table,
@@ -1085,24 +1116,6 @@ Arguments is same as C<delete> method,
 except that C<delete_all> don't have C<where> argument.
 Return value of C<delete_all()> is the count of affected rows.
 
-=head2 C<(experimental) method>
-
-    $dbi->method(
-        update_or_insert => sub {
-            my $self = shift;
-            # do something
-        },
-        find_or_create   => sub {
-            my $self = shift;
-            # do something
-        }
-    );
-
-Register method. These method is called from L<DBIx::Custom> object directory.
-
-    $dbi->update_or_insert;
-    $dbi->find_or_create;
-
 =head2 C<insert>
 
     $dbi->insert(table  => $table, 
@@ -1123,18 +1136,11 @@ default to 0. This is experimental.
 This is overwrites C<default_bind_filter>.
 Return value of C<insert()> is the count of affected rows.
 
-=head2 C<new>
-
-    my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=dbname",
-                                    user => 'ken', password => '!LFKD%$&');
-
-Create a new L<DBIx::Custom> object.
-
 =head2 C<(experimental) each_column>
 
     $dbi->each_column(
         sub {
-            my ($table, $column, $info) = @_;
+            my ($self, $table, $column, $info) = @_;
             
             my $type = $info->{TYPE_NAME};
             
@@ -1146,8 +1152,39 @@ Create a new L<DBIx::Custom> object.
 Get column informations from database.
 Argument is callback.
 You can do anything in callback.
-Callback receive three arguments, table name, column name and column
-information.
+Callback receive four arguments, dbi object, table name,
+column name and columninformation.
+
+=head2 C<(experimental) method>
+
+    $dbi->method(
+        update_or_insert => sub {
+            my $self = shift;
+            # do something
+        },
+        find_or_create   => sub {
+            my $self = shift;
+            # do something
+        }
+    );
+
+Register method. These method is called from L<DBIx::Custom> object directory.
+
+    $dbi->update_or_insert;
+    $dbi->find_or_create;
+
+=head2 C<new>
+
+    my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=dbname",
+                                    user => 'ken', password => '!LFKD%$&');
+
+Create a new L<DBIx::Custom> object.
+
+=head2 C<(experimental) not_exists>
+
+    my $not_exists = $dbi->not_exists;
+
+Get DBIx::Custom::NotExists object.
 
 =head2 C<register_filter>
 
@@ -1187,7 +1224,7 @@ C<default_filter> and C<filter> of C<DBIx::Custom::Result>
         }
     );
 
-Register tag processor.
+Register tag.
 
 =head2 C<rollback>
 
@@ -1282,16 +1319,87 @@ Return value of C<update_all()> is the count of affected rows.
 
 Create a new L<DBIx::Custom::Where> object.
 
-=head2 C<(deprecated) cache_method>
+=head2 C<cache_method>
 
     $dbi          = $dbi->cache_method(\&cache_method);
     $cache_method = $dbi->cache_method
 
 Method to set and get caches.
 
+=head1 Tags
+
+The following tags is available.
+
+=head2 C<?>
+
+Placeholder tag.
+
+    {? NAME}    ->   ?
+
+=head2 C<=>
+
+Equal tag.
+
+    {= NAME}    ->   NAME = ?
+
+=head2 C<E<lt>E<gt>>
+
+Not equal tag.
+
+    {<> NAME}   ->   NAME <> ?
+
+=head2 C<E<lt>>
+
+Lower than tag
+
+    {< NAME}    ->   NAME < ?
+
+=head2 C<E<gt>>
+
+Greater than tag
+
+    {> NAME}    ->   NAME > ?
+
+=head2 C<E<gt>=>
+
+Greater than or equal tag
+
+    {>= NAME}   ->   NAME >= ?
+
+=head2 C<E<lt>=>
+
+Lower than or equal tag
+
+    {<= NAME}   ->   NAME <= ?
+
+=head2 C<like>
+
+Like tag
+
+    {like NAME}   ->   NAME like ?
+
+=head2 C<in>
+
+In tag.
+
+    {in NAME COUNT}   ->   NAME in [?, ?, ..]
+
+=head2 C<insert_param>
+
+Insert parameter tag.
+
+    {insert_param NAME1 NAME2}   ->   (NAME1, NAME2) values (?, ?)
+
+=head2 C<update_param>
+
+Updata parameter tag.
+
+    {update_param NAME1 NAME2}   ->   set NAME1 = ?, NAME2 = ?
+
 =head1 STABILITY
 
-L<DBIx::Custom> is now stable. APIs keep backword compatible in the feature.
+L<DBIx::Custom> is stable. APIs keep backword compatible
+except experimental one in the feature.
 
 =head1 BUGS
 
@@ -1307,7 +1415,7 @@ Yuki Kimoto, C<< <kimoto.yuki at gmail.com> >>
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2009 Yuki Kimoto, all rights reserved.
+Copyright 2009-2011 Yuki Kimoto, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

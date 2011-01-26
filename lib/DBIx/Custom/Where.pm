@@ -14,8 +14,8 @@ use Carp 'croak';
 push @DBIx::Custom::CARP_NOT, __PACKAGE__;
 
 __PACKAGE__->attr(
-  [qw/param query_builder/],
-  clause => sub { [] },
+    [qw/param query_builder/],
+    clause => sub { [] },
 );
 
 sub to_string {
@@ -37,7 +37,6 @@ sub to_string {
 }
 
 our %VALID_OPERATIONS = map { $_ => 1 } qw/and or/;
-
 sub _parse {
     my ($self, $clause, $where, $count, $op) = @_;
     
@@ -73,7 +72,7 @@ sub _parse {
         
         # Column
         my $columns = $self->query_builder->build_query($clause)->columns;
-        croak qq{each tag contains one column name: tag "$clause"}
+        croak qq{Each tag contains one column name: tag "$clause"}
           unless @$columns == 1;
         my $column = $columns->[0];
         
@@ -83,21 +82,24 @@ sub _parse {
         # Push
         my $param = $self->param;
         my $pushed;
-        if (defined $param) {
+        if (ref $param eq 'HASH') {
             if (exists $param->{$column}) {
                 if (ref $param->{$column} eq 'ARRAY') {
-                    $pushed = 1 if exists $param->{$column}->[$count - 1];
-                }
+                    $pushed = 1
+                      if  exists $param->{$column}->[$count - 1]
+                       && ref $param->{$column}->[$count - 1] ne 'DBIx::Custom::NotExists';
+                } 
                 elsif ($count == 1) {
                     $pushed = 1;
                 }
             }
             push @$where, $clause if $pushed;
         }
-        else {
+        elsif (!defined $param) {
             push @$where, $clause;
             $pushed = 1;
         }
+        else { croak "Parameter must be hash reference or undfined value" }
         
         return $pushed;
     }
