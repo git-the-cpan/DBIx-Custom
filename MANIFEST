@@ -15,6 +15,9 @@ MANIFEST			This list of files
 README
 t/dbix-custom-core-mysql-private.t
 t/dbix-custom-core-sqlite.t
+t/dbix-custom-core-sqlite/MyDBI1.pm
+t/dbix-custom-core-sqlite/MyTable1/book.pm
+t/dbix-custom-core-sqlite/MyTable1/Company.pm
 t/dbix-custom-core.t
 t/dbix-custom-mysql-private.t
 t/dbix-custom-query.t
