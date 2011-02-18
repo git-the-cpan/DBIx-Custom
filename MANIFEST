@@ -2,12 +2,12 @@ Changes
 lib/DBIx/Custom.pm
 lib/DBIx/Custom/Guide.pod
 lib/DBIx/Custom/Guide/Ja.pod
+lib/DBIx/Custom/Model.pm
 lib/DBIx/Custom/MySQL.pm
 lib/DBIx/Custom/Query.pm
 lib/DBIx/Custom/QueryBuilder.pm
 lib/DBIx/Custom/Result.pm
 lib/DBIx/Custom/SQLite.pm
-lib/DBIx/Custom/Table.pm
 lib/DBIx/Custom/Tag.pm
 lib/DBIx/Custom/Where.pm
 Makefile.PL
@@ -16,8 +16,11 @@ README
 t/dbix-custom-core-mysql-private.t
 t/dbix-custom-core-sqlite.t
 t/dbix-custom-core-sqlite/MyDBI1.pm
-t/dbix-custom-core-sqlite/MyTable1/book.pm
-t/dbix-custom-core-sqlite/MyTable1/Company.pm
+t/dbix-custom-core-sqlite/MyModel1/book.pm
+t/dbix-custom-core-sqlite/MyModel1/Company.pm
+t/dbix-custom-core-sqlite/MyModel4.pm
+t/dbix-custom-core-sqlite/MyModel4/book.pm
+t/dbix-custom-core-sqlite/MyModel4/company.pm
 t/dbix-custom-core.t
 t/dbix-custom-mysql-private.t
 t/dbix-custom-query.t
