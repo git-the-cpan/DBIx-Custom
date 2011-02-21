@@ -1258,6 +1258,12 @@ $result = $dbi->select(
 );
 is($result->fetch_first->[0], 'B');
 
+$result = $dbi->select(
+    table => 'company', relation => {'company.location_id' => 'location.id'},
+    column => ['location.name as location__name']
+);
+is($result->fetch_first->[0], 'B');
+
 test 'selection';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
@@ -1276,6 +1282,8 @@ $dbi->execute("create table company (name)");
 $model = $dbi->model('company');
 $model->insert({name => 'a'});
 is_deeply($model->list->fetch_hash_all, [{name => 'a'}], 'basic');
+is($dbi->models->{'book'}, $dbi->model('book'));
+is($dbi->models->{'company'}, $dbi->model('company'));
 
 $dbi->model('book');
 eval{$dbi->model('book')->no_exists};
@@ -1369,4 +1377,184 @@ is_deeply($model->list->fetch_hash_all, [{name => 'a'}], 'include all model');
 $model = $dbi->model('book');
 is_deeply($model->list->fetch_hash_all, [{name => 'a'}], 'include all model');
 
+test 'primary_key';
+use MyDBI1;
+$dbi = MyDBI1->connect($NEW_ARGS->{0});
+$model = $dbi->model('book');
+$model->primary_key(['id', 'number']);
+is_deeply($model->primary_key, ['id', 'number']);
 
+test 'columns';
+use MyDBI1;
+$dbi = MyDBI1->connect($NEW_ARGS->{0});
+$model = $dbi->model('book');
+$model->columns(['id', 'number']);
+is_deeply($model->columns, ['id', 'number']);
+
+test 'setup_model';
+use MyDBI1;
+$dbi = MyDBI1->connect($NEW_ARGS->{0});
+$dbi->execute('create table book (id)');
+$dbi->execute('create table company (id, name);');
+$dbi->execute('create table test (id, name, primary key (id, name));');
+$dbi->setup_model;
+is_deeply($dbi->model('book')->columns, ['id']);
+is_deeply($dbi->model('company')->columns, ['id', 'name']);
+
+test 'delete_at';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->delete_at(
+    table => 'table1',
+    primary_key => ['key1', 'key2'],
+    where => [1, 2],
+);
+is_deeply($dbi->select(table => 'table1')->fetch_hash_all, []);
+
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->delete_at(
+    table => 'table1',
+    primary_key => 'key1',
+    where => 1,
+);
+is_deeply($dbi->select(table => 'table1')->fetch_hash_all, []);
+
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->delete_at(
+    table => 'table1',
+    primary_key => ['key1', 'key2'],
+    param => {key1 => 1, key2 => 2},
+);
+is_deeply($dbi->select(table => 'table1')->fetch_hash_all, []);
+
+
+test 'update_at';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->update_at(
+    table => 'table1',
+    primary_key => ['key1', 'key2'],
+    where => [1, 2],
+    param => {key3 => 4}
+);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key2}, 2);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key3}, 4);
+
+$dbi->delete_all(table => 'table1');
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->update_at(
+    table => 'table1',
+    primary_key => 'key1',
+    where => 1,
+    param => {key3 => 4}
+);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key2}, 2);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key3}, 4);
+
+$dbi->delete_all(table => 'table1');
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->update_at(
+    table => 'table1',
+    primary_key => ['key1', 'key2'],
+    param => {key1 => 1, key2 => 2, key3 => 4},
+);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key2}, 2);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key3}, 4);
+
+
+test 'select_at';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$result = $dbi->select_at(
+    table => 'table1',
+    primary_key => ['key1', 'key2'],
+    where => [1, 2]
+);
+$row = $result->fetch_hash_first;
+is($row->{key1}, 1);
+is($row->{key2}, 2);
+is($row->{key3}, 3);
+
+$dbi->delete_all(table => 'table1');
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$result = $dbi->select_at(
+    table => 'table1',
+    primary_key => 'key1',
+    where => 1,
+);
+$row = $result->fetch_hash_first;
+is($row->{key1}, 1);
+is($row->{key2}, 2);
+is($row->{key3}, 3);
+
+$dbi->delete_all(table => 'table1');
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$result = $dbi->select_at(
+    table => 'table1',
+    primary_key => ['key1', 'key2'],
+    param => {key1 => 1, key2 => 2},
+);
+$row = $result->fetch_hash_first;
+is($row->{key1}, 1);
+is($row->{key2}, 2);
+is($row->{key3}, 3);
+
+
+test 'columns';
+use MyDBI1;
+$dbi = MyDBI1->connect($NEW_ARGS->{0});
+$model = $dbi->model('book');
+$model->relation({'book.id' => 'company.id'});
+is_deeply($model->relation, {'book.id' => 'company.id'});
+
+
+test 'model delete_at';
+{
+    package MyDBI6;
+    
+    use base 'DBIx::Custom';
+    
+    sub connect {
+        my $self = shift->SUPER::connect(@_);
+        
+        $self->include_model('MyModel5');
+        
+        return $self;
+    }
+}
+$dbi = MyDBI6->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->model('table1')->delete_at(where => [1, 2]);
+is_deeply($dbi->select(table => 'table1')->fetch_hash_all, []);
+
+
+test 'update_at';
+$dbi = MyDBI6->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$dbi->model('table1')->update_at(
+    where => [1, 2],
+    param => {key3 => 4}
+);
+$result = $dbi->model('table1')->select;
+$row = $result->fetch_hash_first;
+is($row->{key1}, 1);
+is($row->{key2}, 2);
+is($row->{key3}, 4);
+
+test 'select_at';
+$dbi = MyDBI6->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3});
+$result = $dbi->model('table1')->select_at(where => [1, 2]);
+$row = $result->fetch_hash_first;
+is($row->{key1}, 1);
+is($row->{key2}, 2);
+is($row->{key3}, 3);

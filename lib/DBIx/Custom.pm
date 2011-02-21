@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1647';
+our $VERSION = '0.1648';
 
 use 5.008001;
 use strict;
@@ -27,6 +27,7 @@ __PACKAGE__->attr(
         PrintError => 0,
         AutoCommit => 1
     }},
+    models => sub { {} },
     query_builder => sub { DBIx::Custom::QueryBuilder->new },
     result_class  => 'DBIx::Custom::Result',
     safety_column_name => sub { qr/^[\w\.]*$/ },
@@ -290,6 +291,45 @@ sub delete {
 
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
+our %VALID_DELETE_AT_ARGS
+  = map { $_ => 1 } qw/table where append filter query
+                       primary_key param/;
+
+sub delete_at {
+    my ($self, %args) = @_;
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is invalid argument}
+          unless $VALID_DELETE_AT_ARGS{$name};
+    }
+    
+    # Primary key
+    my $primary_keys = delete $args{primary_key};
+    $primary_keys = [$primary_keys] unless ref $primary_keys;
+    
+    # Where clause
+    my $where = {};
+    if (exists $args{where}) {
+        my $where_columns = delete $args{where};
+        $where_columns = [$where_columns] unless ref $where_columns;
+        
+        for(my $i = 0; $i < @$primary_keys; $i ++) {
+           $where->{$primary_keys->[$i]} = $where_columns->[$i];
+        }
+    }
+    elsif (exists $args{param}) {
+        my $param = delete $args{param};
+        
+        for(my $i = 0; $i < @$primary_keys; $i ++) {
+           $where->{$primary_keys->[$i]}
+             = delete $param->{$primary_keys->[$i]};
+        }
+    }
+    
+    return $self->delete(where => $where, %args);
+}
+
 sub DESTROY { }
 
 our %VALID_EXECUTE_ARGS = map { $_ => 1 } qw/param filter table/;
@@ -515,6 +555,23 @@ sub select {
     my $relation  = $args{relation};
     my $append    = $args{append};
     my $filter    = $args{filter};
+
+    # Relation table
+    if (!$selection && $relation) {
+        foreach my $rcolumn (keys %$relation) {
+            my $table1 = (split (/\./, $rcolumn))[0];
+            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
+            
+            my $table1_exists;
+            my $table2_exists;
+            foreach my $table (@$tables) {
+                $table1_exists = 1 if $table eq $table1;
+                $table2_exists = 1 if $table eq $table2;
+            }
+            push @$tables, $table1 unless $table1_exists;
+            push @$tables, $table2 unless $table2_exists;
+        }
+    }
     
     # SQL stack
     my @sql;
@@ -567,9 +624,13 @@ sub select {
     push @sql, $swhere;
     
     # Relation
-    if ($relation) {
+    if (!$selection && $relation) {
         push @sql, $swhere eq '' ? 'where' : 'and';
         foreach my $rcolumn (keys %$relation) {
+            my $table1 = (split (/\./, $rcolumn))[0];
+            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
+            push @$tables, ($table1, $table2);
+            
             push @sql, ("$rcolumn = " . $relation->{$rcolumn},  'and');
         }
     }
@@ -593,22 +654,59 @@ sub select {
     return $result;
 }
 
+our %VALID_SELECT_AT_ARGS
+  = map { $_ => 1 } qw/table column where append relation filter query selection
+                       param primary_key/;
+
+sub select_at {
+    my ($self, %args) = @_;
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is invalid argument}
+          unless $VALID_SELECT_AT_ARGS{$name};
+    }
+    
+    # Primary key
+    my $primary_keys = delete $args{primary_key};
+    $primary_keys = [$primary_keys] unless ref $primary_keys;
+    
+    # Where clause
+    my $where = {};
+    if (exists $args{where}) {
+        my $where_columns = delete $args{where};
+        $where_columns = [$where_columns] unless ref $where_columns;
+        
+        for(my $i = 0; $i < @$primary_keys; $i ++) {
+           $where->{$primary_keys->[$i]} = $where_columns->[$i];
+        }
+    }
+    elsif (exists $args{param}) {
+        my $param = delete $args{param};
+        for(my $i = 0; $i < @$primary_keys; $i ++) {
+           $where->{$primary_keys->[$i]}
+             = delete $param->{$primary_keys->[$i]};
+        }
+    }
+    
+    return $self->select(where => $where, %args);
+}
+
 sub model {
     my ($self, $name, $model) = @_;
     
     # Set
-    $self->{model} ||= {};
     if ($model) {
-        $self->{model}{$name} = $model;
+        $self->models->{$name} = $model;
         return $self;
     }
     
     # Check model existance
     croak qq{Model "$name" is not included}
-      unless $self->{model}{$name};
+      unless $self->models->{$name};
     
     # Get
-    return $self->{model}{$name};
+    return $self->models->{$name};
 }
 
 sub include_model {
@@ -664,6 +762,20 @@ sub include_model {
         $self->model($model_name, $model);
     }
     return $self;
+}
+
+sub setup_model {
+    my $self = shift;
+    
+    $self->each_column(
+        sub {
+            my ($self, $table, $column, $column_info) = @_;
+            
+            if (my $model = $self->models->{$table}) {
+                push @{$model->columns}, $column;
+            }
+        }
+    );
 }
 
 our %VALID_UPDATE_ARGS
@@ -763,6 +875,47 @@ sub update {
 }
 
 sub update_all { shift->update(allow_update_all => 1, @_) };
+
+our %VALID_UPDATE_AT_ARGS
+  = map { $_ => 1 } qw/table param
+                       where append filter query
+                       primary_key param/;
+
+sub update_at {
+    my ($self, %args) = @_;
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is invalid argument}
+          unless $VALID_UPDATE_AT_ARGS{$name};
+    }
+    
+    # Primary key
+    my $primary_keys = delete $args{primary_key};
+    $primary_keys = [$primary_keys] unless ref $primary_keys;
+    
+    # Where clause
+    my $where = {};
+    my $param = {};
+    
+    if (exists $args{where}) {
+        my $where_columns = delete $args{where};
+        $where_columns = [$where_columns] unless ref $where_columns;
+        
+        for(my $i = 0; $i < @$primary_keys; $i ++) {
+           $where->{$primary_keys->[$i]} = $where_columns->[$i];
+        }
+    }
+    elsif (exists $args{param}) {
+        $param = delete $args{param};
+        for(my $i = 0; $i < @$primary_keys; $i ++) {
+           $where->{$primary_keys->[$i]}
+             = delete $param->{$primary_keys->[$i]};
+        }
+    }
+    
+    return $self->update(where => $where, param => $param, %args);
+}
 
 sub where {
     my $self = shift;
@@ -1054,6 +1207,15 @@ Default filter when row is fetched.
     my $filters = $dbi->filters;
     $dbi        = $dbi->filters(\%filters);
 
+Filters
+
+=head2 C<(experimental) models>
+
+    my $models = $dbi->models;
+    $dbi       = $dbi->models(\%models);
+
+Models
+
 =head2 C<password>
 
     my $password = $dbi->password;
@@ -1189,6 +1351,27 @@ Arguments is same as C<delete> method,
 except that C<delete_all> don't have C<where> argument.
 Return value of C<delete_all()> is the count of affected rows.
 
+=head3 C<delete_at()>
+
+To delete row by using primary key, use C<delete_at()>
+
+    $dbi->delete_at(
+        table => 'book',
+        primary_key => ['id'],
+        where => ['123']
+    );
+
+In this example, row which id column is 123 is deleted.
+NOTE that you must pass array reference as C<where>.
+
+You can also write arguments like this.
+
+    $dbi->delete_at(
+        table => 'book',
+        primary_key => ['id'],
+        param => {id => '123'}
+    );
+
 =head2 C<insert>
 
     $dbi->insert(table  => $table, 
@@ -1213,9 +1396,9 @@ Return value of C<insert()> is the count of affected rows.
 
     $dbi->each_column(
         sub {
-            my ($self, $table, $column, $info) = @_;
+            my ($self, $table, $column, $column_info) = @_;
             
-            my $type = $info->{TYPE_NAME};
+            my $type = $column_info->{TYPE_NAME};
             
             if ($type eq 'DATE') {
                 # ...
@@ -1226,7 +1409,7 @@ Get column informations from database.
 Argument is callback.
 You can do anything in callback.
 Callback receive four arguments, dbi object, table name,
-column name and columninformation.
+column name and column information.
 
 =head2 C<(experimental) include_model>
 
@@ -1378,6 +1561,15 @@ First element is a string. it contains tags,
 such as "{= title} or {like author}".
 Second element is paramters.
 
+=head3 C<select_at()>
+
+To select row by using primary key, use C<select_at()>.
+
+    $dbi->select_at(table => 'book', primary_key => ['id'], where => ['123']);
+
+In this example, row which id colunm is 123 is selected.
+NOTE that you must pass array reference as C<where>.
+
 =head2 C<update>
 
     $dbi->update(table  => $table, 
@@ -1411,6 +1603,13 @@ Return value of C<update()> is the count of affected rows.
 
 Set and get a L<DBIx::Custom::Model> object,
 
+=head2 C<(experimental) setup_model>
+
+    $dbi->setup_model;
+
+Setup all model objects.
+C<columns> and C<primary_key> is automatically set.
+
 =head2 C<update_all>
 
     $dbi->update_all(table  => $table, 
@@ -1422,6 +1621,22 @@ Execute update statement to update all rows.
 Arguments is same as C<update> method,
 except that C<update_all> don't have C<where> argument.
 Return value of C<update_all()> is the count of affected rows.
+
+=head3 C<update_at()>
+
+To update row by using primary key, use C<update_at()>
+
+    $dbi->update_at(
+        table => 'book',
+        primary_key => ['id'],
+        where => ['123'],
+        param => {name => 'Ken'}
+    );
+
+In this example, row which id column is 123 is updated.
+NOTE that you must pass array reference as C<where>.
+If C<param> contains primary key,
+the key and value is delete from C<param>.
 
 =head2 C<(experimental) where>
 

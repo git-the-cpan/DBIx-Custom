@@ -21,6 +21,8 @@ t/dbix-custom-core-sqlite/MyModel1/Company.pm
 t/dbix-custom-core-sqlite/MyModel4.pm
 t/dbix-custom-core-sqlite/MyModel4/book.pm
 t/dbix-custom-core-sqlite/MyModel4/company.pm
+t/dbix-custom-core-sqlite/MyModel5.pm
+t/dbix-custom-core-sqlite/MyModel5/table1.pm
 t/dbix-custom-core.t
 t/dbix-custom-mysql-private.t
 t/dbix-custom-query.t
@@ -28,5 +30,6 @@ t/dbix-custom-querybuilder.t
 t/dbix-custom-result-sqlite.t
 t/dbix-custom-sqlite.t
 xt/boilerplate.t
+xt/dbix-connector.t
 xt/pod.t
 META.yml                                 Module meta-data (added by MakeMaker)

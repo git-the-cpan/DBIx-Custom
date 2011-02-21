@@ -10,7 +10,12 @@ use Carp 'croak';
 # Carp trust relationship
 push @DBIx::Custom::CARP_NOT, __PACKAGE__;
 
-__PACKAGE__->attr(['dbi', 'table']);
+__PACKAGE__->attr(
+    ['dbi', 'table'],
+    columns => sub { [] },
+    primary_key => sub { [] },
+    relation => sub { {} }
+);
 
 our $AUTOLOAD;
 
@@ -46,20 +51,41 @@ sub method {
     return $self;
 }
 
-sub new {
-    my $self = shift->SUPER::new(@_);
+sub insert     { my $self = shift; $self->dbi->insert(table => $self->table, @_) }
+sub update     { my $self = shift; $self->dbi->update(table => $self->table, @_) }
+sub update_all { my $self = shift; $self->dbi->update_all(table => $self->table, @_) }
+sub delete     { my $self = shift; $self->dbi->delete(table => $self->table, @_) }
+sub delete_all { my $self = shift; $self->dbi->delete_all(table => $self->table, @_) }
+sub select     { my $self = shift; $self->dbi->select(table => $self->table, @_) }
+
+sub update_at {
+    my $self = shift;
     
-    # Methods
-    my @methods = qw/insert update update_all delete delete_all select/;
-    foreach my $method (@methods) {
-        $self->method(
-            $method => sub {
-                my $self = shift;
-                return $self->dbi->$method(table => $self->table, @_);
-            }
-        );
-    }
+    return $self->dbi->update_at(
+        table => $self->table,
+        primary_key => $self->primary_key,
+        @_
+    );
+}
+
+sub delete_at {
+    my $self = shift;
     
+    return $self->dbi->delete_at(
+        table => $self->table,
+        primary_key => $self->primary_key,
+        @_
+    );
+}
+
+sub select_at {
+    my $self = shift;
+    
+    return $self->dbi->select_at(
+        table => $self->table,
+        primary_key => $self->primary_key,
+        @_
+    );
     return $self;
 }
 
@@ -69,13 +95,42 @@ sub DESTROY { }
 
 =head1 NAME
 
-DBIx::Custom::Table - Table base class(experimental)
+DBIx::Custom::Model - Model (experimental)
 
 =head1 SYNOPSIS
 
 use DBIx::Custom::Table;
 
 my $table = DBIx::Custom::Model->new(table => 'books');
+
+=head1 ATTRIBUTES
+
+=head2 C<(experimental) columns>
+
+    my $columns = $model->columns;
+    $model      = $model->columns(['id', 'number']);
+
+=head2 C<dbi>
+
+    my $dbi = $model->dbi;
+    $model  = $model->dbi($dbi);
+
+L<DBIx::Custom> object.
+
+=head2 C<table>
+
+    my $table = $model->table;
+    $model    = $model->table('book');
+
+Table name.
+    
+=head2 C<primary_key>
+
+    my $primary_key = $model->primary_key;
+    $model          = $model->primary_key(['id', 'number']);
+
+Foreign key. This is used by C<update_at()>, C<delete_at()>,
+C<select_at()>.
 
 =head1 METHODS
 
