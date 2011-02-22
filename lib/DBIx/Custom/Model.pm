@@ -41,31 +41,38 @@ sub AUTOLOAD {
     }
 }
 
-sub method {
+sub column_clause {
     my $self = shift;
     
-    # Merge
-    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
+    my $args = ref $_[0] eq 'HASH' ? $_[0] : {@_};
     
-    return $self;
+    my $table   = $self->table;
+    my $columns = $self->columns;
+    my $add     = $args->{add} || [];
+    my $remove  = $args->{remove} || [];
+    my %remove  = map {$_ => 1} @$remove;
+    
+    my @column;
+    foreach my $column (@$columns) {
+        push @column, "$table.$column as $column"
+          unless $remove{$column};
+    }
+    
+    foreach my $column (@$add) {
+        push @column, $column;
+    }
+    
+    return join (', ', @column);
 }
 
-sub insert     { my $self = shift; $self->dbi->insert(table => $self->table, @_) }
-sub update     { my $self = shift; $self->dbi->update(table => $self->table, @_) }
-sub update_all { my $self = shift; $self->dbi->update_all(table => $self->table, @_) }
-sub delete     { my $self = shift; $self->dbi->delete(table => $self->table, @_) }
-sub delete_all { my $self = shift; $self->dbi->delete_all(table => $self->table, @_) }
-sub select     { my $self = shift; $self->dbi->select(table => $self->table, @_) }
-
-sub update_at {
+sub delete {
     my $self = shift;
-    
-    return $self->dbi->update_at(
-        table => $self->table,
-        primary_key => $self->primary_key,
-        @_
-    );
+    $self->dbi->delete(table => $self->table, @_);
+}
+
+sub delete_all {
+    my $self = shift;
+    $self->dbi->delete_all(table => $self->table, @_);
 }
 
 sub delete_at {
@@ -78,18 +85,63 @@ sub delete_at {
     );
 }
 
+sub DESTROY { }
+
+sub insert {
+    my $self = shift;
+    $self->dbi->insert(table => $self->table, @_);
+}
+
+sub method {
+    my $self = shift;
+    
+    # Merge
+    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
+    
+    return $self;
+}
+
+sub select {
+    my $self = shift;
+    $self->dbi->select(
+        table => $self->table,
+        relation => $self->relation,
+        @_
+    );
+}
+
 sub select_at {
     my $self = shift;
     
     return $self->dbi->select_at(
         table => $self->table,
         primary_key => $self->primary_key,
+        relation => $self->relation,
         @_
     );
-    return $self;
 }
 
-sub DESTROY { }
+sub update {
+    my $self = shift;
+    $self->dbi->update(table => $self->table, @_)
+}
+
+sub update_all {
+    my $self = shift;
+    $self->dbi->update_all(table => $self->table, @_);
+}
+
+
+sub update_at {
+    my $self = shift;
+    
+    return $self->dbi->update_at(
+        table => $self->table,
+        primary_key => $self->primary_key,
+        @_
+    );
+}
 
 1;
 
@@ -137,6 +189,28 @@ C<select_at()>.
 L<DBIx::Custom> inherits all methods from L<Object::Simple>,
 and you can use all methods of the object set to C<dbi>.
 and implements the following new ones.
+
+=head2 C<column_clause()>
+
+To create column clause automatically, use C<column_clause()>.
+Valude of C<table> and C<columns> is used.
+
+    my $column_clause = $model->column_clause;
+
+If C<table> is 'book'ÅAC<column> is ['id', 'name'],
+the following clause is created.
+
+    book.id as id, book.name as name
+
+These column name is for removing column name ambiguities.
+
+If you remove some columns, use C<remove> option.
+
+    my $column_clause = $model->column_clause(remove => ['id']);
+
+If you add some column, use C<add> option.
+
+    my $column_clause = $model->column_clause(add => ['company.id as company__id']);
 
 =head2 C<delete>
 
