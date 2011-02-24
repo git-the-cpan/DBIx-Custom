@@ -23,6 +23,8 @@ t/dbix-custom-core-sqlite/MyModel4/book.pm
 t/dbix-custom-core-sqlite/MyModel4/company.pm
 t/dbix-custom-core-sqlite/MyModel5.pm
 t/dbix-custom-core-sqlite/MyModel5/table1.pm
+t/dbix-custom-core-sqlite/MyModel5/table1_1.pm
+t/dbix-custom-core-sqlite/MyModel5/table1_2.pm
 t/dbix-custom-core-sqlite/MyModel6.pm
 t/dbix-custom-core-sqlite/MyModel6/table1.pm
 t/dbix-custom-core-sqlite/MyModel6/table2.pm
