@@ -247,6 +247,22 @@ sub fetch_multi {
     return $rows;
 }
 
+sub remove_end_filter {
+    my $self = shift;
+    
+    $self->{end_filter} = {};
+    
+    return $self;
+}
+
+sub remove_filter {
+    my $self = shift;
+    
+    $self->{filter} = {};
+    
+    return $self;
+}
+
 # Deprecated
 sub default_filter {
     my $self = shift;
@@ -427,6 +443,18 @@ Row count must be specified.
 Filters.
 These each filters override the filters applied by C<apply_filter> of
 L<DBIx::Custom>.
+
+=head2 C<(experimental) remove_end_filter>
+
+    $result->remove_end_filter;
+
+Remove end filter.
+
+=head2 C<(experimental) remove_filter>
+
+    $result->remove_filter;
+
+Remove filter. End filter is not removed.
 
 =head2 C<(experimental) stash>
 

@@ -93,6 +93,16 @@ sub insert {
     $self->dbi->insert(table => $self->table, @_);
 }
 
+sub insert_at {
+    my $self = shift;
+    
+    return $self->dbi->insert_at(
+        table => $self->table,
+        primary_key => $self->primary_key,
+        @_
+    );
+}
+
 sub method {
     my $self = shift;
     
@@ -197,8 +207,8 @@ Table name is real table name in database.
     my $primary_key = $model->primary_key;
     $model          = $model->primary_key(['id', 'number']);
 
-Foreign key. This is used by C<update_at()>, C<delete_at()>,
-C<select_at()>.
+Foreign key. This is used by C<insert_at>,C<update_at()>,
+C<delete_at()>,C<select_at()>.
 
 =head1 METHODS
 
@@ -242,6 +252,13 @@ you don't have to specify C<table> option.
 Same as C<delete_all()> of L<DBIx::Custom> except that
 you don't have to specify C<table> option.
 
+=head2 C<delete_at>
+
+    $table->delete_at(...);
+    
+Same as C<delete()> of L<DBIx::Custom> except that
+you don't have to specify C<table> and C<primary_key> option.
+
 =head2 C<method>
 
     $table->method(
@@ -262,6 +279,13 @@ Add method to a L<DBIx::Custom::Table> object.
 Same as C<insert()> of L<DBIx::Custom> except that
 you don't have to specify C<table> option.
 
+=head2 C<insert>
+
+    $table->insert_at(...);
+    
+Same as C<insert_at()> of L<DBIx::Custom> except that
+you don't have to specify C<table> and C<primary_key> option.
+
 =head2 C<new>
 
     my $table = DBIx::Custom::Table->new;
@@ -274,6 +298,13 @@ Create a L<DBIx::Custom::Table> object.
     
 Same as C<select()> of L<DBIx::Custom> except that
 you don't have to specify C<table> option.
+
+=head2 C<select_at>
+
+    $table->select_at(...);
+    
+Same as C<select_at()> of L<DBIx::Custom> except that
+you don't have to specify C<table> and C<primary_key> option.
 
 =head2 C<update>
 
@@ -288,3 +319,10 @@ you don't have to specify C<table> option.
     
 Same as C<update_all()> of L<DBIx::Custom> except that
 you don't have to specify table name.
+
+=head2 C<update_at>
+
+    $table->update_at(...);
+    
+Same as C<update_at()> of L<DBIx::Custom> except that
+you don't have to specify C<table> and C<primary_key> option.
