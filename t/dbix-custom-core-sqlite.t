@@ -27,7 +27,8 @@ my $CREATE_TABLE = {
     0 => 'create table table1 (key1 char(255), key2 char(255));',
     1 => 'create table table1 (key1 char(255), key2 char(255), key3 char(255), key4 char(255), key5 char(255));',
     2 => 'create table table2 (key1 char(255), key3 char(255));',
-    3 => 'create table table1 (key1 Date, key2 datetime);'
+    3 => 'create table table1 (key1 Date, key2 datetime);',
+    4 => 'create table table3 (key3 int, key4 int);'
 };
 
 my $SELECT_SOURCES = {
@@ -50,6 +51,7 @@ my @sources;
 my $select_SOURCE;
 my $insert_SOURCE;
 my $update_SOURCE;
+my $param;
 my $params;
 my $sql;
 my $result;
@@ -65,6 +67,8 @@ my $ret_val;
 my $infos;
 my $model;
 my $where;
+my $update_param;
+my $insert_param;
 
 # Prepare table
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
@@ -1300,7 +1304,7 @@ test 'selection';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
 $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
-$result = $dbi->select(selection => '* from table1', where => {key1 => 1});
+$result = $dbi->select(selection => '* from {table table1}', where => {key1 => 1});
 is_deeply($result->fetch_hash_all, [{key1 => 1, key2 => 2}]);
 
 test 'Model class';
@@ -1586,8 +1590,6 @@ test 'columns';
 use MyDBI1;
 $dbi = MyDBI1->connect($NEW_ARGS->{0});
 $model = $dbi->model('book');
-$model->relation({'book.id' => 'company.id'});
-is_deeply($model->relation, {'book.id' => 'company.id'});
 
 
 test 'model delete_at';
@@ -1654,7 +1656,7 @@ is($row->{key2}, 2);
 is($row->{key3}, 3);
 
 
-test 'model select relation';
+test 'column_clause';
 {
     package MyDBI7;
     
@@ -1672,21 +1674,6 @@ test 'model select relation';
 $dbi = MyDBI7->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
 $dbi->execute($CREATE_TABLE->{2});
-$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
-$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 3});
-$result = $dbi->model('table1')->select(column => ['key3'], where => {'table1.key1' => 1});
-is($result->fetch_hash_first->{key3}, 3);
-$result = $dbi->model('table1')->select_at(column => ['key3'], where => [1]);
-is($result->fetch_hash_first->{key3}, 3);
-$dbi->execute('create table table3 (key1);');
-$dbi->model('table3')->insert(param => {key1 => 'a'});
-is_deeply($dbi->model('table3')->select(where => {key1 => 'a'})->fetch_hash_first,
-   {key1 => 'A'});
-
-test 'column_clause';
-$dbi = MyDBI7->connect($NEW_ARGS->{0});
-$dbi->execute($CREATE_TABLE->{0});
-$dbi->execute($CREATE_TABLE->{2});
 $dbi->setup_model;
 $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
 $dbi->insert(table => 'table2', param => {key1 => 1, key3 => 3});
@@ -1695,7 +1682,105 @@ $result = $model->select(column => $model->column_clause, where => {'table1.key1
 is_deeply($result->fetch_hash_first, {key1 => 1, key2 => 2});
 $result = $model->select(column => $model->column_clause(remove => ['key1']), where => {'table1.key1' => 1});
 is_deeply($result->fetch_hash_first, {key2 => 2});
-$result = $model->select(column => $model->column_clause(add => ['key3']), where => {'table1.key1' => 1});
+$result = $model->select(column => $model->column_clause(add => ['table2.key3']), where => {'table1.key1' => 1});
 is_deeply($result->fetch_hash_first, {key1 => 1, key2 => 2, key3 => 3});
 
+test 'update_param';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5});
+$dbi->insert(table => 'table1', param => {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10});
 
+$param = {key2 => 11};
+$update_param = $dbi->update_param($param);
+$sql = <<"EOS";
+update {table table1} $update_param
+where key1 = 1
+EOS
+$dbi->execute($sql, param => $param);
+$result = $dbi->execute($SELECT_SOURCES->{0});
+$rows   = $result->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 11, key3 => 3, key4 => 4, key5 => 5},
+                  {key1 => 6, key2 => 7,  key3 => 8, key4 => 9, key5 => 10}],
+                  "basic");
+
+
+eval { $dbi->update_param({";" => 1}) };
+like($@, qr/not safety/);
+
+
+test 'insert_param';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$param = {key1 => 1};
+$insert_param = $dbi->insert_param($param);
+$sql = <<"EOS";
+insert into {table table1} $insert_param
+EOS
+
+$dbi->execute($sql, param => $param);
+is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1);
+
+eval { $dbi->insert_param({";" => 1}) };
+like($@, qr/not safety/);
+
+
+test 'join';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table1', param => {key1 => 3, key2 => 4});
+$dbi->execute($CREATE_TABLE->{2});
+$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 5});
+$dbi->execute($CREATE_TABLE->{4});
+$dbi->insert(table => 'table3', param => {key3 => 5, key4 => 4});
+$rows = $dbi->select(
+    table => 'table1',
+    column => 'table1.key1 as table1_key1, table2.key1 as table2_key1, key2, key3',
+    where   => {'table1.key2' => 2},
+    join  => ['left outer join table2 on table1.key1 = table2.key1']
+)->fetch_hash_all;
+is_deeply($rows, [{table1_key1 => 1, table2_key1 => 1, key2 => 2, key3 => 5}]);
+
+$rows = $dbi->select(
+    table => 'table1',
+    where   => {'key1' => 1},
+    join  => ['left outer join table2 on table1.key1 = table2.key1']
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2}]);
+
+eval {
+    $rows = $dbi->select(
+        table => 'table1',
+        column => 'table1.key1 as table1_key1, table2.key1 as table2_key1, key2, key3',
+        where   => {'table1.key2' => 2},
+        join  => {'table1.key1' => 'table2.key1'}
+    );
+};
+like ($@, qr/array/);
+
+$rows = $dbi->select(
+    table => 'table1',
+    where   => {'key1' => 1},
+    join  => ['left outer join table2 on table1.key1 = table2.key1',
+              'left outer join table3 on table2.key3 = table3.key3']
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2}]);
+
+$rows = $dbi->select(
+    column => 'table3.key4 as table3__key4',
+    table => 'table1',
+    where   => {'table1.key1' => 1},
+    join  => ['left outer join table2 on table1.key1 = table2.key1',
+              'left outer join table3 on table2.key3 = table3.key3']
+)->fetch_hash_all;
+is_deeply($rows, [{table3__key4 => 4}]);
+
+$rows = $dbi->select(
+    column => 'table1.key1 as table1__key1',
+    table => 'table1',
+    where   => {'table3.key4' => 4},
+    join  => ['left outer join table2 on table1.key1 = table2.key1',
+              'left outer join table3 on table2.key3 = table3.key3']
+)->fetch_hash_all;
+is_deeply($rows, [{table1__key1 => 1}]);

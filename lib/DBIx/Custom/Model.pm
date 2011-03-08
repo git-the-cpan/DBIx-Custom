@@ -15,7 +15,7 @@ __PACKAGE__->attr(
     columns => sub { [] },
     filter => sub { [] },
     primary_key => sub { [] },
-    relation => sub { {} }
+    join => sub { [] }
 );
 
 our $AUTOLOAD;
@@ -117,7 +117,7 @@ sub select {
     my $self = shift;
     $self->dbi->select(
         table => $self->table,
-        relation => $self->relation,
+        join => $self->join,
         @_
     );
 }
@@ -128,7 +128,6 @@ sub select_at {
     return $self->dbi->select_at(
         table => $self->table,
         primary_key => $self->primary_key,
-        relation => $self->relation,
         @_
     );
 }
@@ -193,6 +192,15 @@ This filter is applied when L<DBIx::Custom> C<include_model()> is called.
     $model   = $model->name('book');
 
 Model name.
+
+=head2 C<(experimental) join>
+
+    my $join = $model->join;
+    $model   = $model->join(
+        ['left outer join company on book.company_id = company.id']
+    );
+    
+Default join clause. This is used by C<select()>.
 
 =head2 C<table>
 

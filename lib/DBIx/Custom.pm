@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1654';
+our $VERSION = '0.1655';
 
 use 5.008001;
 use strict;
@@ -369,7 +369,9 @@ sub execute{
     $arg_tables = [$arg_tables]
       unless ref $arg_tables eq 'ARRAY';
     push @$tables, @$arg_tables;
+    
     foreach my $table (@$tables) {
+        next unless $table;
         $filter = {
             %$filter,
             %{$self->{filter}{out}->{$table} || {}}
@@ -409,6 +411,7 @@ sub execute{
         my $in_filter  = {};
         my $end_filter = {};
         foreach my $table (@$tables) {
+            next unless $table;
             $in_filter = {
                 %$in_filter,
                 %{$self->{filter}{in}{$table} || {}}
@@ -532,6 +535,23 @@ sub insert_at {
     return $self->insert(param => $param, %args);
 }
 
+sub insert_param {
+    my ($self, $param) = @_;
+    
+    # Insert paramter tag
+    my @tag;
+    push @tag, '{insert_param';
+    my $safety = $self->safety_column_name;
+    foreach my $column (keys %$param) {
+        croak qq{"$column" is not safety column name}
+          unless $column =~ /$safety/;
+        push @tag, $column;
+    }
+    push @tag, '}';
+    
+    return join ' ', @tag;
+}
+
 sub each_column {
     my ($self, $cb) = @_;
     
@@ -593,7 +613,19 @@ sub register_filter {
 sub register_tag { shift->query_builder->register_tag(@_) }
 
 our %VALID_SELECT_ARGS
-  = map { $_ => 1 } qw/table column where append relation filter query selection/;
+  = map { $_ => 1 } qw/table column where append relation filter query selection join/;
+
+sub _need_tables {
+    my ($self, $tree, $need_tables, $tables) = @_;
+    
+    foreach my $table (@$tables) {
+        
+        if ($tree->{$table}) {
+            $need_tables->{$table} = 1;
+            $self->_need_tables($tree, $need_tables, [$tree->{$table}{parent}])
+        }
+    }
+}
 
 sub select {
     my ($self, %args) = @_;
@@ -613,26 +645,17 @@ sub select {
     $columns = [$columns] unless ref $columns;
     my $selection = $args{selection} || '';
     my $where     = $args{where} || {};
-    my $relation  = $args{relation} || {};
     my $append    = $args{append};
     my $filter    = $args{filter};
-
-    # Relation
-    if (!$selection && keys %$relation) {
-        foreach my $rcolumn (keys %$relation) {
-            my $table1 = (split (/\./, $rcolumn))[0];
-            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
-            
-            my $table1_exists;
-            my $table2_exists;
-            foreach my $table (@$tables) {
-                $table1_exists = 1 if $table eq $table1;
-                $table2_exists = 1 if $table eq $table2;
-            }
-            unshift @$tables, $table1 unless $table1_exists;
-            unshift @$tables, $table2 unless $table2_exists;
-        }
-    }
+    my $join =     $args{join} || [];
+    croak qq{"join" must be array reference}
+      unless ref $join eq 'ARRAY';
+    
+    my @join_tables;
+    unshift @join_tables, $tables->[-1];
+    
+    # Relation table(DEPRECATED!);
+    $self->_add_relation_table($args{relation}, $tables);
     
     # SQL stack
     my @sql;
@@ -641,11 +664,13 @@ sub select {
     
     if ($selection) {
         push @sql, $selection;
+        push @join_tables, @{$self->_tables($selection)};
     }
     else {
         # Column clause
         if (@$columns) {
             foreach my $column (@$columns) {
+                push @join_tables, @{$self->_tables($column)};
                 push @sql, ($column, ',');
             }
             pop @sql if $sql[-1] eq ',';
@@ -680,20 +705,50 @@ sub select {
     
     # String where
     my $swhere = "$w";
-    push @sql, $swhere;
     
-    # Relation
-    if (!$selection && keys %$relation) {
-        push @sql, $swhere eq '' ? 'where' : 'and';
-        foreach my $rcolumn (keys %$relation) {
-            my $table1 = (split (/\./, $rcolumn))[0];
-            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
-            push @$tables, ($table1, $table2);
+    # Table name in Where
+    unshift @join_tables, @{$self->_tables($swhere)};
+    
+    # Join
+    if (@$join) {
+        my $tree = {};
+        
+        for (my $i = 0; $i < @$join; $i++) {
             
-            push @sql, ("$rcolumn = " . $relation->{$rcolumn},  'and');
+            my $join_clause = $join->[$i];
+            
+            if ($join_clause =~ /\s([^\.\s]+?)\..+\s([^\.\s]+?)\./) {
+                
+                my $table1 = $1;
+                my $table2 = $2;
+                
+                croak qq{right side table of "$join_clause" must be uniq}
+                  if exists $tree->{$table2};
+                
+                $tree->{$table2}
+                  = {position => $i, parent => $table1, join => $join_clause};
+            }
+            else {
+                croak qq{join "$join_clause" must be two table name};
+            }
+        }
+        
+        my $need_tables = {};
+        $self->_need_tables($tree, $need_tables, \@join_tables);
+        
+        
+        my @need_tables = sort { $tree->{$a}{position} <=> $tree->{$b}{position} } keys %$need_tables;
+
+        foreach my $need_table (@need_tables) {
+            push @sql, $tree->{$need_table}{join};
         }
     }
-    pop @sql if $sql[-1] eq 'and';
+    
+    # Add where
+    push @sql, $swhere;
+    
+    # Relation(DEPRECATED!);
+    $self->_push_relation(\@sql, $tables, $args{relation}, $swhere eq '' ? 1 : 0);
     
     # Append statement
     push @sql, $append if $append;
@@ -705,6 +760,8 @@ sub select {
     my $query = $self->create_query($sql);
     return $query if $args{query};
     
+    unshift @$tables, @join_tables;
+    
     # Execute query
     my $result = $self->execute(
         $query, param  => $where, filter => $filter,
@@ -715,7 +772,7 @@ sub select {
 
 our %VALID_SELECT_AT_ARGS
   = map { $_ => 1 } qw/table column where append relation filter query selection
-                       param primary_key/;
+                       param primary_key left_join/;
 
 sub select_at {
     my ($self, %args) = @_;
@@ -999,6 +1056,23 @@ sub update_at {
     return $self->update(where => $where, param => $param, %args);
 }
 
+sub update_param {
+    my ($self, $param) = @_;
+    
+    # Update parameter tag
+    my @tag;
+    push @tag, '{update_param';
+    my $safety = $self->safety_column_name;
+    foreach my $column (keys %$param) {
+        croak qq{"$column" is not safety column name}
+          unless $column =~ /$safety/;
+        push @tag, $column;
+    }
+    push @tag, '}';
+    
+    return join ' ', @tag;
+}
+
 sub where {
     my $self = shift;
 
@@ -1070,6 +1144,22 @@ sub _croak {
     }
 }
 
+sub _tables {
+    my ($self, $source) = @_;
+    
+    my $tables = [];
+    
+    my $safety_name = $self->safety_column_name;
+    
+    while ($source =~ /\b(\w+)\./g) {
+        push @$tables, $1;
+    }
+    
+    return $tables;
+}
+
+
+
 # DEPRECATED!
 __PACKAGE__->attr(
     dbi_options => sub { {} },
@@ -1124,6 +1214,42 @@ sub default_fetch_filter {
 # DEPRECATED!
 sub register_tag_processor {
     return shift->query_builder->register_tag_processor(@_);
+}
+
+# DEPRECATED!
+sub _push_relation {
+    my ($self, $sql, $tables, $relation, $need_where) = @_;
+    
+    if (keys %{$relation || {}}) {
+        push @$sql, $need_where ? 'where' : 'and';
+        foreach my $rcolumn (keys %$relation) {
+            my $table1 = (split (/\./, $rcolumn))[0];
+            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
+            push @$tables, ($table1, $table2);
+            push @$sql, ("$rcolumn = " . $relation->{$rcolumn},  'and');
+        }
+    }
+    pop @$sql if $sql->[-1] eq 'and';    
+}
+
+# DEPRECATED!
+sub _add_relation_table {
+    my ($self, $relation, $tables) = @_;
+    
+    if (keys %{$relation || {}}) {
+        foreach my $rcolumn (keys %$relation) {
+            my $table1 = (split (/\./, $rcolumn))[0];
+            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
+            my $table1_exists;
+            my $table2_exists;
+            foreach my $table (@$tables) {
+                $table1_exists = 1 if $table eq $table1;
+                $table2_exists = 1 if $table eq $table2;
+            }
+            unshift @$tables, $table1 unless $table1_exists;
+            unshift @$tables, $table2 unless $table2_exists;
+        }
+    }
 }
 
 1;
@@ -1490,6 +1616,14 @@ NOTE that you must pass array reference as C<where>.
 If C<param> contains primary key,
 the key and value is delete from C<param>.
 
+=head2 C<(experimental) insert_param>
+
+    my $insert_param = $dbi->insert_param({title => 'a', age => 2});
+
+Create insert parameter tag.
+
+    {title => 'a', age => 2}   ->   {insert_param title age}
+
 =head2 C<(experimental) each_column>
 
     $dbi->each_column(
@@ -1638,6 +1772,7 @@ This is same as L<DBI>'s C<rollback>.
         where     => \%where,
         append    => $append,
         relation  => \%relation,
+        join => ['left outer join company on book.company_id = company.id']
         filter    => \%filter,
         query     => 1,
         selection => $selection
@@ -1661,6 +1796,9 @@ C<selection> is string of column name and tables. This is experimental
 First element is a string. it contains tags,
 such as "{= title} or {like author}".
 Second element is paramters.
+
+C<join> is join clause after from clause.
+This is experimental.
 
 =head3 C<(experimental) select_at()>
 
@@ -1692,6 +1830,14 @@ C<query> is if you don't execute sql and get L<DBIx::Custom::Query> object as re
 default to 0. This is experimental.
 This is overwrites C<default_bind_filter>.
 Return value of C<update()> is the count of affected rows.
+
+=head2 C<(experimental) update_param>
+
+    my $update_param = $dbi->update_param({title => 'a', age => 2});
+
+Create update parameter tag.
+
+    {title => 'a', age => 2}   ->   {update_param title age}
 
 =head2 C<(experimental) model>
 

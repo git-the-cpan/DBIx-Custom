@@ -1,4 +1,10 @@
-0.1653
+0.1655
+    - added experimental DBIx::Custom::Model join attribute
+    - added experimental select() join option
+    - deprecated select() relation option
+    - added experimental update_param and insert_param
+    - remove experimental DBIx::Custom::Model relation
+0.1654
     - selection can contain where clause.
 0.1653
     - added experimental DBIx::Custom::Result remove_filter()
