@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1655';
+our $VERSION = '0.1656';
 
 use 5.008001;
 use strict;
@@ -241,9 +241,9 @@ our %VALID_DELETE_ARGS
 sub delete {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_DELETE_ARGS{$name};
     }
     
@@ -307,9 +307,9 @@ our %VALID_DELETE_AT_ARGS
 sub delete_at {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_DELETE_AT_ARGS{$name};
     }
     
@@ -349,9 +349,9 @@ our %VALID_EXECUTE_ARGS = map { $_ => 1 } qw/param filter table/;
 sub execute{
     my ($self, $query, %args)  = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_EXECUTE_ARGS{$name};
     }
     
@@ -369,6 +369,13 @@ sub execute{
     $arg_tables = [$arg_tables]
       unless ref $arg_tables eq 'ARRAY';
     push @$tables, @$arg_tables;
+
+    # Organize tables
+    my %table_set = map {defined $_ ? ($_ => 1) : ()} @$tables;
+    my $main_table = pop @$tables;
+    delete $table_set{$main_table} if $main_table;
+    $tables = [keys %table_set];
+    push @$tables, $main_table if $main_table;
     
     foreach my $table (@$tables) {
         next unless $table;
@@ -442,9 +449,9 @@ our %VALID_INSERT_ARGS = map { $_ => 1 } qw/table param append
 sub insert {
     my ($self, %args) = @_;
 
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_INSERT_ARGS{$name};
     }
     
@@ -497,9 +504,9 @@ our %VALID_INSERT_AT_ARGS
 sub insert_at {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_INSERT_AT_ARGS{$name};
     }
     
@@ -630,9 +637,9 @@ sub _need_tables {
 sub select {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_SELECT_ARGS{$name};
     }
     
@@ -651,26 +658,28 @@ sub select {
     croak qq{"join" must be array reference}
       unless ref $join eq 'ARRAY';
     
-    my @join_tables;
-    unshift @join_tables, $tables->[-1];
-    
-    # Relation table(DEPRECATED!);
-    $self->_add_relation_table($args{relation}, $tables);
+    # Add relation tables(DEPRECATED!);
+    $self->_add_relation_table($tables, $args{relation});
     
     # SQL stack
     my @sql;
-    
     push @sql, 'select';
     
-    if ($selection) {
+    # Selection
+    if ($selection) { 
         push @sql, $selection;
-        push @join_tables, @{$self->_tables($selection)};
+        if ($selection =~ /from\s+(?:\{table\s+)?([^\s\{]+?)\b/) {
+             unshift @$tables, $1;
+        }
+        unshift @$tables, @{$self->_tables($selection)};
     }
+    
+    # Column names and table name
     else {
-        # Column clause
+        # Column names
         if (@$columns) {
             foreach my $column (@$columns) {
-                push @join_tables, @{$self->_tables($column)};
+                unshift @$tables, @{$self->_tables($column)};
                 push @sql, ($column, ',');
             }
             pop @sql if $sql[-1] eq ',';
@@ -678,22 +687,27 @@ sub select {
         else { push @sql, '*' }
         
         # Table
-        croak qq{"table" option must be specified} unless @$tables;
         push @sql, 'from';
-        foreach my $table (@$tables) {
-            push @sql, ($table, ',');
+        if ($args{relation}) {
+            my $found = {};
+            foreach my $table (@$tables) {
+                push @sql, ($table, ',') unless $found->{$table};
+                $found->{$table} = 1;
+            }
         }
-        pop @sql if $sql[-1] eq ',';
+        else { push @sql, $tables->[-1] }
+        pop @sql if ($sql[-1] || '') eq ',';
     }
+    
+    # Main table
+    croak "Not found table name" unless $tables->[-1];
     
     # Where
     my $w;
     if (ref $where eq 'HASH') {
         my $clause = ['and'];
         push @$clause, "{= $_}" for keys %$where;
-        $w = $self->where;
-        $w->clause($clause);
-        $w->param($where);
+        $w = $self->where(clause => $clause, param => $where);
     }
     elsif (ref $where eq 'DBIx::Custom::Where') {
         $w = $where;
@@ -706,45 +720,13 @@ sub select {
     # String where
     my $swhere = "$w";
     
-    # Table name in Where
-    unshift @join_tables, @{$self->_tables($swhere)};
+    # Add table names in where clause
+    unshift @$tables, @{$self->_tables($swhere)};
     
-    # Join
-    if (@$join) {
-        my $tree = {};
-        
-        for (my $i = 0; $i < @$join; $i++) {
-            
-            my $join_clause = $join->[$i];
-            
-            if ($join_clause =~ /\s([^\.\s]+?)\..+\s([^\.\s]+?)\./) {
-                
-                my $table1 = $1;
-                my $table2 = $2;
-                
-                croak qq{right side table of "$join_clause" must be uniq}
-                  if exists $tree->{$table2};
-                
-                $tree->{$table2}
-                  = {position => $i, parent => $table1, join => $join_clause};
-            }
-            else {
-                croak qq{join "$join_clause" must be two table name};
-            }
-        }
-        
-        my $need_tables = {};
-        $self->_need_tables($tree, $need_tables, \@join_tables);
-        
-        
-        my @need_tables = sort { $tree->{$a}{position} <=> $tree->{$b}{position} } keys %$need_tables;
-
-        foreach my $need_table (@need_tables) {
-            push @sql, $tree->{$need_table}{join};
-        }
-    }
+    # Push join
+    $self->_push_join(\@sql, $join, $tables);
     
-    # Add where
+    # Add where clause
     push @sql, $swhere;
     
     # Relation(DEPRECATED!);
@@ -759,8 +741,6 @@ sub select {
     # Create query
     my $query = $self->create_query($sql);
     return $query if $args{query};
-    
-    unshift @$tables, @join_tables;
     
     # Execute query
     my $result = $self->execute(
@@ -777,9 +757,9 @@ our %VALID_SELECT_AT_ARGS
 sub select_at {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_SELECT_AT_ARGS{$name};
     }
     
@@ -921,9 +901,9 @@ our %VALID_UPDATE_ARGS
 sub update {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_UPDATE_ARGS{$name};
     }
     
@@ -1020,9 +1000,9 @@ our %VALID_UPDATE_AT_ARGS
 sub update_at {
     my ($self, %args) = @_;
     
-    # Check arguments
+    # Check argument names
     foreach my $name (keys %args) {
-        croak qq{"$name" is invalid argument}
+        croak qq{Argument "$name" is invalid name}
           unless $VALID_UPDATE_AT_ARGS{$name};
     }
     
@@ -1078,7 +1058,8 @@ sub where {
 
     return DBIx::Custom::Where->new(
         query_builder => $self->query_builder,
-        safety_column_name => $self->safety_column_name
+        safety_column_name => $self->safety_column_name,
+        @_
     );
 }
 
@@ -1158,7 +1139,42 @@ sub _tables {
     return $tables;
 }
 
+sub _push_join {
+    my ($self, $sql, $join, $join_tables) = @_;
+    
+    return unless @$join;
+    
+    my $tree = {};
+    
+    for (my $i = 0; $i < @$join; $i++) {
+        
+        my $join_clause = $join->[$i];
+        
+        if ($join_clause =~ /\s([^\.\s]+?)\..+\s([^\.\s]+?)\./) {
+            
+            my $table1 = $1;
+            my $table2 = $2;
+            
+            croak qq{right side table of "$join_clause" must be uniq}
+              if exists $tree->{$table2};
+            
+            $tree->{$table2}
+              = {position => $i, parent => $table1, join => $join_clause};
+        }
+        else {
+            croak qq{join "$join_clause" must be two table name};
+        }
+    }
+    
+    my $need_tables = {};
+    $self->_need_tables($tree, $need_tables, $join_tables);
+    
+    my @need_tables = sort { $tree->{$a}{position} <=> $tree->{$b}{position} } keys %$need_tables;
 
+    foreach my $need_table (@need_tables) {
+        push @$sql, $tree->{$need_table}{join};
+    }
+}
 
 # DEPRECATED!
 __PACKAGE__->attr(
@@ -1234,7 +1250,7 @@ sub _push_relation {
 
 # DEPRECATED!
 sub _add_relation_table {
-    my ($self, $relation, $tables) = @_;
+    my ($self, $tables, $relation) = @_;
     
     if (keys %{$relation || {}}) {
         foreach my $rcolumn (keys %$relation) {
@@ -1887,7 +1903,10 @@ the key and value is delete from C<param>.
 
 =head2 C<(experimental) where>
 
-    my $where = $dbi->where;
+    my $where = $dbi->where(
+        clause => ['and', '{= title}', '{= author}'],
+        param => {title => 'Perl', author => 'Ken'}
+    );
 
 Create a new L<DBIx::Custom::Where> object.
 
