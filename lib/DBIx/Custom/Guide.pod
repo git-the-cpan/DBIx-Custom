@@ -6,9 +6,9 @@ DBIx::Custom::Guide - DBIx::Custom Guide
 
 =head1 GUIDE
 
-(This module contain many experimental featrues.
- in each pod of module, experimental marked method
- is maybe changed without warnings)
+(This guide will be completed nearly future and contains EXPERIMENTAL features
+The features marked EXPERIMENTAL in POD of L<DBIx::Custom> is
+EXPERIMENTAL ones)
 
 L<DBIx::Custom> is the class to make easy to execute SQL.
 This is L<DBI> wrapper class like L<DBIx::Class> or L<DBIx::Simple>.
@@ -362,20 +362,6 @@ Following SQL is executed.
 
 C<appned> is also used at C<insert()>, C<update()>, C<update_all()>
 C<delete()>, C<delete_all()>, and C<select()>.
-
-Instead of C<column> and C<table>,
-you can use C<selection>.
-This is used to specify column names and table names at once
-
-    my $selection = <<"EOS";
-    title, author, company_name
-    from book inner join company on book.company_id = company.id
-    EOS
-
-    $dbi->select(selection => $selection);
-
-Note that you can't use where clause in C<selection>.
-use clause like "inner join".
 
 =head3 C<execute()>
 

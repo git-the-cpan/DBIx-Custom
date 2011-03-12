@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               DBIx-Custom
-version:            0.1658
+version:            0.1659
 abstract:           Useful database access, respecting SQL!
 author:
     - Yuki Kimoto <kimoto.yuki@gmail.com>
