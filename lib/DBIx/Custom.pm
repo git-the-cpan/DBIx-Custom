@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1659';
+our $VERSION = '0.1660';
 
 use 5.008001;
 use strict;
@@ -22,43 +22,6 @@ use Encode qw/encode_utf8 decode_utf8/;
 __PACKAGE__->attr(
     [qw/data_source password pid user/],
     cache => 1,
-    dbi_option => sub { {} },
-    default_dbi_option => sub {{
-        RaiseError => 1,
-        PrintError => 0,
-        AutoCommit => 1
-    }},
-    models => sub { {} },
-    query_builder => sub { DBIx::Custom::QueryBuilder->new },
-    result_class  => 'DBIx::Custom::Result',
-    safety_character => '\w',
-    stash => sub { {} }
-);
-
-sub dbh {
-    my $self = shift;
-
-    if (@_) {
-        $self->{dbh} = $_[0];
-        return $self;
-    }
-    else {
-        my $pid = $$;
-        if ($self->pid eq $pid) {
-            return $self->{dbh};
-        }
-        else {
-            # Create new connection in child process
-            croak "Process is forked in transaction"
-              unless $self->{dbh}->{AutoCommit};
-            $self->pid($pid);
-            $self->{dbh}->{InactiveDestroy} = 1;
-            return $self->{dbh} = $self->_connect;
-        }
-    }
-}
-
-__PACKAGE__->attr(
     cache_method => sub {
         sub {
             my $self = shift;
@@ -66,22 +29,32 @@ __PACKAGE__->attr(
             $self->{_cached} ||= {};
             
             if (@_ > 1) {
-                $self->{_cached}{$_[0]} = $_[1] 
+                $self->{_cached}{$_[0]} = $_[1];
             }
             else {
-                return $self->{_cached}{$_[0]}
+                return $self->{_cached}{$_[0]};
             }
         }
-    }
-);
-
-__PACKAGE__->attr(
+    },
+    dbi_option => sub { {} },
+    default_dbi_option => sub {
+        {
+            RaiseError => 1,
+            PrintError => 0,
+            AutoCommit => 1
+        }
+    },
     filters => sub {
         {
             encode_utf8 => sub { encode_utf8($_[0]) },
             decode_utf8 => sub { decode_utf8($_[0]) }
         }
-    }
+    },
+    models => sub { {} },
+    query_builder => sub { DBIx::Custom::QueryBuilder->new },
+    result_class  => 'DBIx::Custom::Result',
+    safety_character => '\w',
+    stash => sub { {} }
 );
 
 our $AUTOLOAD;
@@ -241,6 +214,29 @@ sub create_query {
     return $query;
 }
 
+sub dbh {
+    my $self = shift;
+
+    if (@_) {
+        $self->{dbh} = $_[0];
+        return $self;
+    }
+    else {
+        my $pid = $$;
+        if ($self->pid eq $pid) {
+            return $self->{dbh};
+        }
+        else {
+            # Create new connection in child process
+            croak "Process is forked in transaction"
+              unless $self->{dbh}->{AutoCommit};
+            $self->pid($pid);
+            $self->{dbh}->{InactiveDestroy} = 1;
+            return $self->{dbh} = $self->_connect;
+        }
+    }
+}
+
 our %VALID_DELETE_ARGS
   = map { $_ => 1 } qw/table where append filter allow_delete_all query/;
 
@@ -307,8 +303,7 @@ sub delete {
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
 our %VALID_DELETE_AT_ARGS
-  = map { $_ => 1 } qw/table where append filter query
-                       primary_key param/;
+  = map { $_ => 1 } qw/table where append filter query primary_key param/;
 
 sub delete_at {
     my ($self, %args) = @_;
@@ -450,8 +445,9 @@ sub execute{
     return $affected;
 }
 
-our %VALID_INSERT_ARGS = map { $_ => 1 } qw/table param append
-                                            filter query/;
+our %VALID_INSERT_ARGS
+  = map { $_ => 1 } qw/table param append filter query/;
+
 sub insert {
     my ($self, %args) = @_;
 
@@ -503,9 +499,8 @@ sub insert {
 }
 
 our %VALID_INSERT_AT_ARGS
-  = map { $_ => 1 } qw/table param
-                       where append filter query
-                       primary_key param/;
+  = map { $_ => 1 } qw/table param where append filter
+                       query primary_key param/;
 
 sub insert_at {
     my ($self, %args) = @_;
@@ -551,7 +546,7 @@ sub insert_at {
 sub insert_param {
     my ($self, $param) = @_;
     
-    # Insert paramter tag
+    # Insert parameter tag
     my @tag;
     push @tag, '{insert_param';
     my $safety = $self->safety_character;
@@ -674,20 +669,34 @@ sub select {
     elsif ($all_column) {
     
         # Find tables
-        my $main_table = $tables->[-1] || '';
+        my $main_table;
         my %tables;
-        foreach my $j (@$join) {
-            my $tables = $self->_tables($j);
-            foreach my $table (@$tables) {
-                $tables{$table} = 1;
+        if (ref $all_column eq 'ARRAY') {
+            foreach my $table (@$all_column) {
+                if (($table || '') eq $tables->[-1]) {
+                    $main_table = $table;
+                }
+                else {
+                    $tables{$table} = 1;
+                }
             }
         }
-        delete $tables{$main_table};
-        my @column_clause;
+        else {
+            $main_table = $tables->[-1] || '';
+            foreach my $j (@$join) {
+                my $tables = $self->_tables($j);
+                foreach my $table (@$tables) {
+                    $tables{$table} = 1;
+                }
+            }
+            delete $tables{$main_table};
+        }
         
         # Column clause of main table
-        push @sql, $self->model($main_table)->column_clause;
-        push @sql, ',';
+        if ($main_table) {
+            push @sql, $self->model($main_table)->column_clause;
+            push @sql, ',';
+        }
         
         # Column cluase of other tables
         foreach my $table (keys %tables) {
@@ -721,7 +730,12 @@ sub select {
                 $found->{$table} = 1;
             }
         }
-        else { push @sql, $tables->[-1] }
+        else {
+            my $main_table = $tables->[-1] || '';
+            push @sql, $self->view($main_table)
+                     ? $self->view($main_table)
+                     : $main_table;
+        }
         pop @sql if ($sql[-1] || '') eq ',';
     }
     
@@ -897,6 +911,9 @@ sub include_model {
         # Set
         $self->model($model->name, $model);
         
+        # View
+        $self->view($model->table, $model->view) if $model->view;
+        
         # Apply filter
         croak "${name_space}::$model_class filter must be array reference"
           unless ref $model->filter eq 'ARRAY';
@@ -921,8 +938,8 @@ sub setup_model {
 }
 
 our %VALID_UPDATE_ARGS
-  = map { $_ => 1 } qw/table param
-                       where append filter allow_update_all query/;
+  = map { $_ => 1 } qw/table param where append filter
+                       allow_update_all query/;
 
 sub update {
     my ($self, %args) = @_;
@@ -1019,9 +1036,8 @@ sub update {
 sub update_all { shift->update(allow_update_all => 1, @_) };
 
 our %VALID_UPDATE_AT_ARGS
-  = map { $_ => 1 } qw/table param
-                       where append filter query
-                       primary_key param/;
+  = map { $_ => 1 } qw/table param where append filter
+                       query primary_key param/;
 
 sub update_at {
     my ($self, %args) = @_;
@@ -1077,6 +1093,23 @@ sub update_param {
     push @tag, '}';
     
     return join ' ', @tag;
+}
+
+sub view {
+    my $self = shift;
+    my $name = shift;
+    
+    # View
+    $self->{view} ||= {};
+    if (@_) {
+        $self->{view}->{$name} = $_[0];
+        return $self;
+    }
+    else {
+        return $name && $self->{view}->{$name}
+             ? "(" . $self->{view}->{$name} . ") as $name"
+             : undef;
+    }
 }
 
 sub where {
@@ -1458,7 +1491,7 @@ L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki>
     my $cache = $dbi->cache;
     $dbi      = $dbi->cache(1);
 
-Enable caching of L<DBIx::Custom::Query>,
+Enable caching L<DBIx::Custom::Query>,
 default to 1.
 
 =head2 C<data_source>
@@ -1490,10 +1523,8 @@ default to the following values.
         AutoCommit => 1,
     }
 
-You should not change C<AutoCommit> value directly
-to check if the process is in transaction correctly.
-L<DBIx::Custom> determin the process is in transaction
-if AutoCommit is 0. 
+You should not change C<AutoCommit> value directly,
+the value is used to check if the process is in transaction.
 
 =head2 C<filters>
 
@@ -1502,7 +1533,7 @@ if AutoCommit is 0.
 
 Filters, registered by C<register_filter()>.
 
-=head2 C<models EXPERIMENTAL>
+=head2 C<models> EXPERIMENTAL
 
     my $models = $dbi->models;
     $dbi       = $dbi->models(\%models);
@@ -1530,12 +1561,12 @@ Query builder, default to L<DBIx::Custom::QueryBuilder> object.
 
 Result class, default to L<DBIx::Custom::Result>.
 
-=head2 C<safety_character EXPERIMENTAL>
+=head2 C<safety_character> EXPERIMENTAL
 
     my $safety_character = $self->safety_character;
     $dbi                 = $self->safety_character($character);
 
-Regex of safety character consist of table and column name, default to '\w'.
+Regex of safety character for table and column name, default to '\w'.
 Note that you don't have to specify like '[\w]'.
 
 =head2 C<user>
@@ -1551,46 +1582,95 @@ L<DBIx::Custom> inherits all methods from L<Object::Simple>
 and use all methods of L<DBI>
 and implements the following new ones.
 
-=head2 C<apply_filter EXPERIMENTAL>
+=head2 C<apply_filter> EXPERIMENTAL
 
     $dbi->apply_filter(
         'book',
-        $column1 => {out => $outfilter1, in => $infilter1, end => $endfilter1}
-        $column2 => {out => $outfilter2, in => $infilter2, end => $endfilter2}
-        ...,
+        'issue_date' => {
+            out => 'tp_to_date',
+            in  => 'date_to_tp',
+            end => 'tp_to_displaydate'
+        },
+        'write_date' => {
+            out => 'tp_to_date',
+            in  => 'date_to_tp',
+            end => 'tp_to_displaydate'
+        }
     );
 
-Apply filter to specified column, C<out> is the direction from perl to database,
-C<in> is the direction from database to perl,
-C<end> is filter after C<in> filter.
+Apply filter to columns.
+C<out> filter is executed before data is send to database.
+C<in> filter is executed after a row is fetch.
+C<end> filter is execute after C<in> filter is executed.
 
-You can use three column name to apply filter to column data.
+Filter is applied to the follwoing tree column name pattern.
 
-                       (Example)
-    1. column        : author
-    2. table.column  : book.author
-    3. table__column : book__author
+       PETTERN         EXAMPLE
+    1. Column        : author
+    2. Table.Column  : book.author
+    3. Table__Column : book__author
+
+If column name is duplicate with other table,
+Main filter specified by C<table> option is used.
+
+You can set multiple filters at once.
+
+    $dbi->apply_filter(
+        'book',
+        [qw/issue_date write_date/] => {
+            out => 'tp_to_date',
+            in  => 'date_to_tp',
+            end => 'tp_to_displaydate'
+        }
+    );
+
+=head2 C<cache_method>
+
+    $dbi          = $dbi->cache_method(\&cache_method);
+    $cache_method = $dbi->cache_method
+
+Method to set and get cache.
+Default to the following one.
+
+    sub {
+        my $self = shift;
+        
+        $self->{_cached} ||= {};
+        
+        if (@_ > 1) {
+            $self->{_cached}{$_[0]} = $_[1];
+        }
+        else {
+            return $self->{_cached}{$_[0]};
+        }
+    }
 
 =head2 C<connect>
 
-    my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=dbname",
-                                    user => 'ken', password => '!LFKD%$&');
+    my $dbi = DBIx::Custom->connect(
+        data_source => "dbi:mysql:database=dbname",
+        user => 'ken',
+        password => '!LFKD%$&',
+        dbi_option => {mysql_enable_utf8 => 1}
+    );
 
-Create a new L<DBIx::Custom> object and connect to the database.
+Connect to the database and create a new L<DBIx::Custom> object.
+
 L<DBIx::Custom> is a wrapper of L<DBI>.
 C<AutoCommit> and C<RaiseError> options are true, 
-and C<PrintError> option is false by default. 
+and C<PrintError> option is false by default.
 
 =head2 C<create_query>
     
     my $query = $dbi->create_query(
-        "select * from book where {= author} and {like title};"
+        "insert into book {insert_param title author};";
     );
 
-Create the instance of L<DBIx::Custom::Query> from the source of SQL.
+Create L<DBIx::Custom::Query> object.
+
 If you want to get high performance,
-use C<create_query()> method and execute it by C<execute()> method
-instead of suger methods.
+create L<DBIx::Custom::Query> object and execute the query by C<execute()>
+instead of other methods, such as C<insert>, C<update>.
 
     $dbi->execute($query, {author => 'Ken', title => '%Perl%'});
 
@@ -1601,116 +1681,337 @@ instead of suger methods.
 
 Get and set database handle of L<DBI>.
 
-If process is changed by forking, new connection is created
-and get new database hande ofL<DBI>. This feature is EXPERIMETNAL.
+If process is spawn by forking, new connection is created automatically.
+This feature is EXPERIMETNAL.
 
 =head2 C<execute>
 
-    my $result = $dbi->execute($query,  param => $params, filter => \@filter);
-    my $result = $dbi->execute($source, param => $params, filter => \@filter);
+    my $result = $dbi->execute(
+        "select * from book where {= title} and {like author}",
+        param => {title => 'Perl', author => '%Ken%'}
+    );
 
-Execute query or the source of SQL.
-Query is L<DBIx::Custom::Query> object.
-Return value is L<DBIx::Custom::Result> if select statement is executed,
-or the count of affected rows if insert, update, delete statement is executed.
+Execute SQL, containing tags.
+Return value is L<DBIx::Custom::Result> in select statement, or
+the count of affected rows in insert, update, delete statement.
+
+Tag is turned into the statement containing place holder
+before SQL is executed.
+
+    select * from where title = ? and author like ?;
+
+See also L<Tags/Tags>.
+
+The following opitons are currently available.
+
+=over 4
+
+=item C<filter>
+
+Filter, executed before data is send to database. This is array reference.
+Filter value is code reference or
+filter name registerd by C<register_filter()>.
+
+    # Basic
+    $dbi->execute(
+        $sql,
+        filter => [
+            title  => sub { uc $_[0] }
+            author => sub { uc $_[0] }
+        ]
+    );
+    
+    # At once
+    $dbi->execute(
+        $sql,
+        filter => [
+            [qw/title author/]  => sub { uc $_[0] }
+        ]
+    );
+    
+    # Filter name
+    $dbi->execute(
+        $sql,
+        filter => [
+            title  => 'upper_case',
+            author => 'upper_case'
+        ]
+    );
+
+These filters are added to the C<out> filters, set by C<apply_filter()>.
+
+=back
 
 =head2 C<delete>
 
-    $dbi->delete(table  => $table,
-                 where  => \%where,
-                 append => $append,
-                 filter => \@filter,
-                 query  => 1);
+    $dbi->delete(table => 'book', where => {title => 'Perl'});
 
-Execute delete statement.
-C<delete> method have C<table>, C<where>, C<append>, and C<filter> arguments.
-C<table> is a table name.
-C<where> is where clause. this must be hash reference.
-C<append> is a string added at the end of the SQL statement.
-C<filter> is filters when parameter binding is executed.
-C<query> is if you don't execute sql and get L<DBIx::Custom::Query> object as return value.
-default to 0. This is EXPERIMENTAL.
-Return value of C<delete()> is the count of affected rows.
+Delete statement.
+
+The following opitons are currently available.
+
+=over 4
+
+=item C<table>
+
+Table name.
+
+    $dbi->delete(table => 'book');
+
+=item C<where>
+
+Where clause. This is hash reference or L<DBIx::Custom::Where> object.
+    
+    # Hash reference
+    $dbi->delete(where => {title => 'Perl'});
+    
+    # DBIx::Custom::Where object
+    my $where = $dbi->where(
+        clause => ['and', '{= author}', '{like title}'],
+        param  => {author => 'Ken', title => '%Perl%'}
+    );
+    $dbi->delete(where => $where);
+
+=item C<append>
+
+Append statement to last of SQL. This is string.
+
+    $dbi->delete(append => 'order by title');
+
+=item C<filter>
+
+Filter, executed before data is send to database. This is array reference.
+Filter value is code reference or
+filter name registerd by C<register_filter()>.
+
+    # Basic
+    $dbi->delete(
+        filter => [
+            title  => sub { uc $_[0] }
+            author => sub { uc $_[0] }
+        ]
+    );
+    
+    # At once
+    $dbi->delete(
+        filter => [
+            [qw/title author/]  => sub { uc $_[0] }
+        ]
+    );
+    
+    # Filter name
+    $dbi->delete(
+        filter => [
+            title  => 'upper_case',
+            author => 'upper_case'
+        ]
+    );
+
+These filters are added to the C<out> filters, set by C<apply_filter()>.
+
+=item C<query> EXPERIMENTAL
+
+Get L<DBIx::Custom::Query> object instead of executing SQL.
+This is true or false value.
+
+    my $query = $dbi->delete(query => 1);
+
+You can check SQL.
+
+    my $sql = $query->sql;
+
+=back
 
 =head2 C<delete_all>
 
     $dbi->delete_all(table => $table);
 
-Execute delete statement to delete all rows.
-Arguments is same as C<delete> method,
-except that C<delete_all> don't have C<where> argument.
-Return value of C<delete_all()> is the count of affected rows.
+Delete statement to delete all rows.
+Options is same as C<delete()>.
 
-=head3 C<delete_at() EXPERIMENTAL>
+=head2 C<delete_at()> EXPERIMENTAL
 
-To delete row by using primary key, use C<delete_at()>
+Delete statement, using primary key.
 
     $dbi->delete_at(
         table => 'book',
-        primary_key => ['id'],
-        where => ['123']
+        primary_key => 'id',
+        where => '5'
     );
 
-In this example, row which id column is 123 is deleted.
-NOTE that you must pass array reference as C<where>.
+This method is same as C<delete()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<delete()> is available.
 
-You can also write arguments like this.
+=over 4
 
-    $dbi->delete_at(
-        table => 'book',
-        primary_key => ['id'],
-        param => {id => '123'}
-    );
+=item C<primary_key>
+
+Primary key. This is constant value or array reference.
+    
+    # Constant value
+    $dbi->delete(primary_key => 'id');
+
+    # Array reference
+    $dbi->delete(primary_key => ['id1', 'id2' ]);
+
+This is used to create where clause.
+
+=item C<where>
+
+Where clause, created from primary key information.
+This is constant value or array reference.
+
+    # Constant value
+    $dbi->delete(where => 5);
+
+    # Array reference
+    $dbi->delete(where => [3, 5]);
+
+In first examle, the following SQL is created.
+
+    delete from book where id = ?;
+
+Place holder is set to 5.
+
+=back
 
 =head2 C<insert>
 
-    $dbi->insert(table  => $table, 
-                 param  => \%param,
-                 append => $append,
-                 filter => \@filter,
-                 query  => 1);
+    $dbi->insert(
+        table  => 'book', 
+        param  => {title => 'Perl', author => 'Ken'}
+    );
 
-Execute insert statement.
-C<insert> method have C<table>, C<param>, C<append>
-and C<filter> arguments.
-C<table> is a table name.
-C<param> is the pairs of column name value. this must be hash reference.
-C<append> is a string added at the end of the SQL statement.
-C<filter> is filters when parameter binding is executed.
-C<query> is if you don't execute sql and get L<DBIx::Custom::Query> object as return value.
-default to 0. This is EXPERIMENTAL.
-This is overwrites C<default_bind_filter>.
-Return value of C<insert()> is the count of affected rows.
+Insert statement.
 
-=head3 C<insert_at() EXPERIMENTAL>
+The following opitons are currently available.
 
-To insert row by using primary key, use C<insert_at()>
+=over 4
+
+=item C<table>
+
+Table name.
+
+    $dbi->insert(table => 'book');
+
+=item C<param>
+
+Insert data. This is hash reference.
+
+    $dbi->insert(param => {title => 'Perl'});
+
+=item C<append>
+
+Append statement to last of SQL. This is string.
+
+    $dbi->insert(append => 'order by title');
+
+=item C<filter>
+
+Filter, executed before data is send to database. This is array reference.
+Filter value is code reference or
+filter name registerd by C<register_filter()>.
+
+    # Basic
+    $dbi->insert(
+        filter => [
+            title  => sub { uc $_[0] }
+            author => sub { uc $_[0] }
+        ]
+    );
+    
+    # At once
+    $dbi->insert(
+        filter => [
+            [qw/title author/]  => sub { uc $_[0] }
+        ]
+    );
+    
+    # Filter name
+    $dbi->insert(
+        filter => [
+            title  => 'upper_case',
+            author => 'upper_case'
+        ]
+    );
+
+These filters are added to the C<out> filters, set by C<apply_filter()>.
+
+=item C<query> EXPERIMENTAL
+
+Get L<DBIx::Custom::Query> object instead of executing SQL.
+This is true or false value.
+
+    my $query = $dbi->insert(query => 1);
+
+You can check SQL.
+
+    my $sql = $query->sql;
+
+=back
+
+=head2 C<insert_at()> EXPERIMENTAL
+
+Insert statement, using primary key.
 
     $dbi->insert_at(
         table => 'book',
-        primary_key => ['id'],
-        where => ['123'],
-        param => {name => 'Ken'}
+        primary_key => 'id',
+        where => '5',
+        param => {title => 'Perl'}
     );
 
-In this example, row which id column is 123 is inserted.
-NOTE that you must pass array reference as C<where>.
-If C<param> contains primary key,
-the key and value is delete from C<param>.
+This method is same as C<insert()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<insert()> is available.
 
-=head2 C<insert_param EXPERIMENTAL>
+=over 4
+
+=item C<primary_key>
+
+Primary key. This is constant value or array reference.
+    
+    # Constant value
+    $dbi->insert(primary_key => 'id');
+
+    # Array reference
+    $dbi->insert(primary_key => ['id1', 'id2' ]);
+
+This is used to create parts of insert data.
+
+=item C<where>
+
+Parts of Insert data, create from primary key information.
+This is constant value or array reference.
+
+    # Constant value
+    $dbi->insert(where => 5);
+
+    # Array reference
+    $dbi->insert(where => [3, 5]);
+
+In first examle, the following SQL is created.
+
+    insert into book (id, title) values (?, ?);
+
+Place holders are set to 5 and 'Perl'.
+
+=back
+
+=head2 C<insert_param> EXPERIMENTAL
 
     my $insert_param = $dbi->insert_param({title => 'a', age => 2});
 
 Create insert parameter tag.
 
-    {title => 'a', age => 2}   ->   {insert_param title age}
+    {insert_param title age}
 
-=head2 C<each_column EXPERIMENTAL>
+=head2 C<each_column> EXPERIMENTAL
 
     $dbi->each_column(
         sub {
-            my ($self, $table, $column, $column_info) = @_;
+            my ($dbi, $table, $column, $column_info) = @_;
             
             my $type = $column_info->{TYPE_NAME};
             
@@ -1719,125 +2020,161 @@ Create insert parameter tag.
             }
         }
     );
-Get column informations from database.
-Argument is callback.
-You can do anything in callback.
+
+Iterate all column informations of all table from database.
+Argument is callback when one column is found.
 Callback receive four arguments, dbi object, table name,
 column name and column information.
 
-=head2 C<include_model EXPERIMENTAL>
-
-    $dbi->include_model(
-        'MyModel' => [
-            'book', 'person', 'company'
-        ]
-    );
-
-Include models. First argument is name space.
-Second argument is array reference of class base names.
-
-If you don't specify second argument, All models under name space is
-included.
+=head2 C<include_model> EXPERIMENTAL
 
     $dbi->include_model('MyModel');
 
-Note that in this case name spece module is needed.
+Include models from specified namespace,
+the following layout is needed to include models.
 
-    # MyModel.pm
+    lib / MyModel.pm
+        / MyModel / book.pm
+                  / company.pm
+
+Name space module, extending L<DBIx::Custom::Model>.
+
+B<MyModel.pm>
+
     package MyModel;
     
     use base 'DBIx::Custom::Model';
+    
+    1;
 
-The following model is instantiated and included.
+Model modules, extending name space module.
 
-    MyModel::book
-    MyModel::person
-    MyModel::company
+B<MyModel/book.pm>
 
-You can get these instance by C<model()>.
+    package MyModel::book;
+    
+    use base 'MyModel';
+    
+    1;
 
-    my $book_model = $dbi->model('book');
+B<MyModel/company.pm>
 
-If you want to other name as model class,
-you can do like this.
+    package MyModel::company;
+    
+    use base 'MyModel';
+    
+    1;
+    
+MyModel::book and MyModel::company is included by C<include_model()>.
 
-    $dbi->include_model(
-        'MyModel' => [
-            {'book' => 'Book'},
-            {'person' => 'Person'}
-        ]
-    );
+You can get model object by C<model()>.
 
-=head2 C<method EXPERIMENTAL>
+    my $book_model    = $dbi->model('book');
+    my $company_model = $dbi->model('company');
+
+See L<DBIx::Custom::Model> to know model features.
+
+=head2 C<method> EXPERIMENTAL
 
     $dbi->method(
         update_or_insert => sub {
             my $self = shift;
-            # do something
+            
+            # Process
         },
         find_or_create   => sub {
             my $self = shift;
-            # do something
+            
+            # Process
         }
     );
 
-Register method. These method is called from L<DBIx::Custom> object directory.
+Register method. These method is called directly from L<DBIx::Custom> object.
 
     $dbi->update_or_insert;
     $dbi->find_or_create;
 
+=head2 C<model> EXPERIMENTAL
+
+    $dbi->model('book')->method(
+        insert => sub { ... },
+        update => sub { ... }
+    );
+    
+    my $model = $dbi->model('book');
+
+Set and get a L<DBIx::Custom::Model> object,
+
 =head2 C<new>
 
-    my $dbi = DBIx::Custom->connect(data_source => "dbi:mysql:database=dbname",
-                                    user => 'ken', password => '!LFKD%$&');
+    my $dbi = DBIx::Custom->new(
+        data_source => "dbi:mysql:database=dbname",
+        user => 'ken',
+        password => '!LFKD%$&',
+        dbi_option => {mysql_enable_utf8 => 1}
+    );
 
 Create a new L<DBIx::Custom> object.
 
-=head2 C<not_exists EXPERIMENTAL>
+=head2 C<not_exists> EXPERIMENTAL
 
     my $not_exists = $dbi->not_exists;
 
-Get DBIx::Custom::NotExists object.
+DBIx::Custom::NotExists object, indicating the column is not exists.
+This is used by C<clause> of L<DBIx::Custom::Where> .
 
 =head2 C<register_filter>
 
-    $dbi->register_filter(%filters);
-    $dbi->register_filter(\%filters);
+    $dbi->register_filter(
+        # Time::Piece object to database DATE format
+        tp_to_date => sub {
+            my $tp = shift;
+            return $tp->strftime('%Y-%m-%d');
+        },
+        # database DATE format to Time::Piece object
+        date_to_tp => sub {
+           my $date = shift;
+           return Time::Piece->strptime($date, '%Y-%m-%d');
+        }
+    );
     
-Register filter. Registered filters is available in the following attributes
-or arguments.
-
-=over 4
-
-=item *
-
-C<filter> argument of C<insert()>, C<update()>,
-C<update_all()>, C<delete()>, C<delete_all()>, C<select()>
-methods
-
-=item *
-
-C<execute()> method
-
-=item *
-
-C<default_filter> and C<filter> of C<DBIx::Custom::Query>
-
-=item *
-
-C<default_filter> and C<filter> of C<DBIx::Custom::Result>
-
-=back
+Register filters, used by C<filter> option of many methods.
 
 =head2 C<register_tag>
 
     $dbi->register_tag(
-        limit => sub {
-            ...;
+        update => sub {
+            my @columns = @_;
+            
+            # Update parameters
+            my $s = 'set ';
+            $s .= "$_ = ?, " for @columns;
+            $s =~ s/, $//;
+            
+            return [$s, \@columns];
         }
     );
 
-Register tag.
+Register tag, used by C<execute()>.
+
+See also L<Tags/Tags> about tag registered by default.
+
+Tag parser receive arguments specified in tag.
+In the following tag, 'title' and 'author' is parser arguments
+
+    {update_param title author} 
+
+Tag parser must return array refrence,
+first element is the result statement, 
+second element is column names corresponding to place holders.
+
+In this example, result statement is 
+
+    set title = ?, author = ?
+
+Column names is
+
+    ['title', 'author']
 
 =head2 C<select>
 
@@ -1874,7 +2211,7 @@ Default is '*' unless C<column> is specified.
     # Default
     $dbi->select(column => '*');
 
-=item C<all_column EXPERIMENTAL>
+=item C<all_column> EXPERIMENTAL
 
 Colum clause, contains all columns of joined table. This is true or false value
 
@@ -1891,11 +2228,15 @@ This create the following column clause.
 Columns of main table is consist of only column name,
 Columns of joined table is consist of table and column name joined C<__>.
 
-Note that this option is failed unless L<DBIx::Custom::Model> object is set to
-C<model> and C<columns> of the object is set.
+Note that this option is failed unless modles is included and
+C<columns> attribute is set.
 
     # Generally do the following way before using all_column option
     $dbi->include_model('MyModel')->setup_model;
+
+You can also specify table names to C<all_column>.
+
+    $dbi->select(all_column => ['book', 'company']);
 
 =item C<where>
 
@@ -1911,7 +2252,7 @@ Where clause. This is hash reference or L<DBIx::Custom::Where> object.
     );
     $dbi->select(where => $where);
 
-=item C<join EXPERIMENTAL>
+=item C<join> EXPERIMENTAL
 
 Join clause used in need. This is array reference.
 
@@ -1944,14 +2285,14 @@ In above select, the following SQL is created.
 
 =item C<append>
 
-Appended statement to last of SQL. This is string.
+Append statement to last of SQL. This is string.
 
     $dbi->select(append => 'order by title');
 
 =item C<filter>
 
-Filter, executed before data is send to database. This is array reference
-and filter value is code reference or
+Filter, executed before data is send to database. This is array reference.
+Filter value is code reference or
 filter name registerd by C<register_filter()>.
 
     # Basic
@@ -1977,22 +2318,22 @@ filter name registerd by C<register_filter()>.
         ]
     );
 
-These filters are added to the C<out> filters set by C<apply_filter()>.
+These filters are added to the C<out> filters, set by C<apply_filter()>.
 
-=item C<query EXPERIMENTAL>
+=item C<query> EXPERIMENTAL
 
 Get L<DBIx::Custom::Query> object instead of executing SQL.
 This is true or false value.
 
-    my $query = $dbi->select(query => 1, ...);
+    my $query = $dbi->select(query => 1);
 
-You can check executing SQL by this object.
+You can check SQL.
 
     my $sql = $query->sql;
 
 =back
 
-=head3 C<select_at() EXPERIMENTAL>
+=head2 C<select_at()> EXPERIMENTAL
 
 Select statement, using primary key.
 
@@ -2002,11 +2343,13 @@ Select statement, using primary key.
         where => '5'
     );
 
-This method is same as select method exept that
-primary_key is specified and C<where> is array reference.
+This method is same as C<select()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
 all option of C<select()> is available.
 
-=head2 C<primary_key>
+=over 4
+
+=item C<primary_key>
 
 Primary key. This is constant value or array reference.
     
@@ -2016,9 +2359,11 @@ Primary key. This is constant value or array reference.
     # Array reference
     $dbi->select(primary_key => ['id1', 'id2' ]);
 
-=head2 C<where>
+This is used to create where clause.
 
-Where clause, created by primary key infromation.
+=item C<where>
+
+Where clause, created from primary key information.
 This is constant value or array reference.
 
     # Constant value
@@ -2033,83 +2378,162 @@ In first examle, the following SQL is created.
 
 Place holder is set to 5.
 
+=back
+
 =head2 C<update>
 
-    $dbi->update(table  => $table, 
-                 param  => \%params,
-                 where  => \%where,
-                 append => $append,
-                 filter => \@filter,
-                 query  => 1)
+    $dbi->update(
+        table  => 'book',
+        param  => {title => 'Perl'},
+        where  => {id => 4}
+    );
 
-Execute update statement.
-C<update> method have C<table>, C<param>, C<where>, C<append>
-and C<filter> arguments.
-C<table> is a table name.
-C<param> is column-value pairs. this must be hash reference.
-C<where> is where clause. this must be hash reference.
-C<append> is a string added at the end of the SQL statement.
-C<filter> is filters when parameter binding is executed.
-C<query> is if you don't execute sql and get L<DBIx::Custom::Query> object as return value.
-default to 0. This is EXPERIMENTAL.
-This is overwrites C<default_bind_filter>.
-Return value of C<update()> is the count of affected rows.
+Update statement.
 
-=head2 C<update_param EXPERIMENTAL>
+The following opitons are currently available.
+
+=over 4
+
+=item C<table>
+
+Table name.
+
+    $dbi->update(table => 'book');
+
+=item C<param>
+
+Update data. This is hash reference.
+
+    $dbi->update(param => {title => 'Perl'});
+
+=item C<where>
+
+Where clause. This is hash reference or L<DBIx::Custom::Where> object.
+    
+    # Hash reference
+    $dbi->update(where => {author => 'Ken', 'title' => 'Perl'});
+    
+    # DBIx::Custom::Where object
+    my $where = $dbi->where(
+        clause => ['and', '{= author}', '{like title}'],
+        param  => {author => 'Ken', title => '%Perl%'}
+    );
+    $dbi->update(where => $where);
+
+=item C<append>
+
+Append statement to last of SQL. This is string.
+
+    $dbi->update(append => 'order by title');
+
+=item C<filter>
+
+Filter, executed before data is send to database. This is array reference.
+Filter value is code reference or
+filter name registerd by C<register_filter()>.
+
+    # Basic
+    $dbi->update(
+        filter => [
+            title  => sub { uc $_[0] }
+            author => sub { uc $_[0] }
+        ]
+    );
+    
+    # At once
+    $dbi->update(
+        filter => [
+            [qw/title author/]  => sub { uc $_[0] }
+        ]
+    );
+    
+    # Filter name
+    $dbi->update(
+        filter => [
+            title  => 'upper_case',
+            author => 'upper_case'
+        ]
+    );
+
+These filters are added to the C<out> filters, set by C<apply_filter()>.
+
+=item C<query> EXPERIMENTAL
+
+Get L<DBIx::Custom::Query> object instead of executing SQL.
+This is true or false value.
+
+    my $query = $dbi->update(query => 1);
+
+You can check SQL.
+
+    my $sql = $query->sql;
+
+=back
+
+=head2 C<update_all>
+
+    $dbi->update_all(table => 'book', param => {title => 'Perl'});
+
+Update statement to update all rows.
+Options is same as C<update()>.
+
+=head2 C<update_at()> EXPERIMENTAL
+
+Update statement, using primary key.
+
+    $dbi->update_at(
+        table => 'book',
+        primary_key => 'id',
+        where => '5',
+        param => {title => 'Perl'}
+    );
+
+This method is same as C<update()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<update()> is available.
+
+=over 4
+
+=item C<primary_key>
+
+Primary key. This is constant value or array reference.
+    
+    # Constant value
+    $dbi->update(primary_key => 'id');
+
+    # Array reference
+    $dbi->update(primary_key => ['id1', 'id2' ]);
+
+This is used to create where clause.
+
+=item C<where>
+
+Where clause, created from primary key information.
+This is constant value or array reference.
+
+    # Constant value
+    $dbi->update(where => 5);
+
+    # Array reference
+    $dbi->update(where => [3, 5]);
+
+In first examle, the following SQL is created.
+
+    update book set title = ? where id = ?
+
+Place holders are set to 'Perl' and 5.
+
+=back
+
+=head2 C<update_param> EXPERIMENTAL
 
     my $update_param = $dbi->update_param({title => 'a', age => 2});
 
 Create update parameter tag.
 
-    {title => 'a', age => 2}   ->   {update_param title age}
+    {update_param title age}
 
-=head2 C<model EXPERIMENTAL>
-
-    $dbi->model('book')->method(
-        insert => sub { ... },
-        update => sub { ... }
-    );
-    
-    my $model = $dbi->model('book');
-
-Set and get a L<DBIx::Custom::Model> object,
-
-=head2 C<setup_model EXPERIMENTAL>
-
-    $dbi->setup_model;
-
-Setup all model objects.
-C<columns> and C<primary_key> is automatically set.
-
-=head2 C<update_all>
-
-    $dbi->update_all(table  => $table, 
-                     param  => \%params,
-                     filter => \@filter,
-                     append => $append);
-
-Execute update statement to update all rows.
-Arguments is same as C<update> method,
-except that C<update_all> don't have C<where> argument.
-Return value of C<update_all()> is the count of affected rows.
-
-=head3 C<update_at() EXPERIMENTAL>
-
-To update row by using primary key, use C<update_at()>
-
-    $dbi->update_at(
-        table => 'book',
-        primary_key => ['id'],
-        where => ['123'],
-        param => {name => 'Ken'}
-    );
-
-In this example, row which id column is 123 is updated.
-NOTE that you must pass array reference as C<where>.
-If C<param> contains primary key,
-the key and value is delete from C<param>.
-
-=head2 C<where EXPERIMENTAL>
+=head2 C<where> EXPERIMENTAL
 
     my $where = $dbi->where(
         clause => ['and', '{= title}', '{= author}'],
@@ -2118,24 +2542,45 @@ the key and value is delete from C<param>.
 
 Create a new L<DBIx::Custom::Where> object.
 
-=head2 C<cache_method>
+=head2 C<setup_model> EXPERIMENTAL
 
-    $dbi          = $dbi->cache_method(\&cache_method);
-    $cache_method = $dbi->cache_method
+    $dbi->setup_model;
 
-Method to set and get caches.
+Setup all model objects.
+C<columns> of model object is automatically set, parsing database information.
+
+=head2 C<view> EXPERIMENTAL
+
+    # Register view
+    $dbi->view(
+        book_issue_data
+          => 'select id, DATE(issue_datatime) as issue_date from book');
+    );
+    
+    # Get view
+    my $view = $dbi->view('book_issue_date');
+
+View.
+
+C<view()> return the following statement when you get a view.
+
+    (select id, DATE(issue_datetime) from book) as book_issue_date
+
+You can use this view in from clause
+
+    "select issue_date from " . $dbi->view('book_issue_date')
 
 =head1 Tags
 
 The following tags is available.
 
-=head2 C<table EXPERIMENTAL>
+=head2 C<table> EXPERIMENTAL
 
 Table tag
 
     {table TABLE}    ->    TABLE
 
-This is used to teach what is applied table to C<execute()>.
+This is used to tell C<execute()> what table is needed .
 
 =head2 C<?>
 
