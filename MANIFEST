@@ -36,6 +36,7 @@ t/dbix-custom-core-sqlite/MyModel7/table2.pm
 t/dbix-custom-core-sqlite/MyModel8.pm
 t/dbix-custom-core-sqlite/MyModel8/table1.pm
 t/dbix-custom-core-sqlite/MyModel8/table1_trim.pm
+t/dbix-custom-core-sqlite/MyModel8/table2.pm
 t/dbix-custom-core.t
 t/dbix-custom-mysql-private.t
 t/dbix-custom-query.t
