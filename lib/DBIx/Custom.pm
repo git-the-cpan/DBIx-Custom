@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1661';
+our $VERSION = '0.1662';
 
 use 5.008001;
 use strict;
@@ -140,14 +140,15 @@ sub apply_filter {
     return $self;
 }
 
-sub method {
-    my $self = shift;
+sub column {
+    my ($self, $table, $columns) = @_;
     
-    # Merge
-    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
+    $columns ||= [];
     
-    return $self;
+    my @column;
+    push @column, "$table.$_ as ${table}__$_" for @$columns;
+    
+    return join (', ', @column);
 }
 
 sub connect {
@@ -681,6 +682,16 @@ sub include_model {
     return $self;
 }
 
+sub method {
+    my $self = shift;
+    
+    # Merge
+    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
+    
+    return $self;
+}
+
 sub model {
     my ($self, $name, $model) = @_;
     
@@ -696,6 +707,16 @@ sub model {
     
     # Get
     return $self->models->{$name};
+}
+
+sub mycolumn {
+    my ($self, $table, $columns) = @_;
+    
+    $columns ||= [];
+    my @column;
+    push @column, "$table.$_ as $_" for @$columns;
+    
+    return join (', ', @column);
 }
 
 sub new {
@@ -816,15 +837,14 @@ sub select {
             
             # Column clause of main table
             if ($main_table) {
-                push @sql, $self->model($main_table)->column_clause;
+                push @sql, $self->model($main_table)->mycolumn;
                 push @sql, ',';
             }
             
             # Column cluase of other tables
             foreach my $table (keys %tables) {
                 unshift @$tables, $table;
-                push @sql, $self->model($table)
-                                ->column_clause(prefix => "${table}__");
+                push @sql, $self->model($table)->column($table);
                 push @sql, ',';
             }
             pop @sql if $sql[-1] eq ',';
@@ -1825,6 +1845,15 @@ filter name registerd by C<register_filter()>.
 
 These filters are added to the C<out> filters, set by C<apply_filter()>.
 
+=head2 C<column> EXPERIMENTAL
+
+    my $column = $self->column(book => ['author', 'title']);
+
+Create column clause. The follwoing column clause is created.
+
+    book.author as book__author,
+    book.title as book__title
+
 =item C<query> EXPERIMENTAL
 
 Get L<DBIx::Custom::Query> object instead of executing SQL.
@@ -2120,6 +2149,15 @@ Register method. These method is called directly from L<DBIx::Custom> object.
     my $model = $dbi->model('book');
 
 Set and get a L<DBIx::Custom::Model> object,
+
+=head2 C<mycolumn> EXPERIMENTAL
+
+    my $column = $self->mycolumn(book => ['author', 'title']);
+
+Create column clause for myself. The follwoing column clause is created.
+
+    book.author as author,
+    book.title as title
 
 =head2 C<new>
 
