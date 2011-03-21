@@ -365,7 +365,7 @@ The following SQL is executed.
       company.name as company__name
     from book
       left outer join company on book.company_id = company.id
- 
+
 Next example.
 
     my $result = $dbi->select(
