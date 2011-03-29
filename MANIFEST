@@ -45,4 +45,5 @@ t/dbix-custom-sqlite.t
 xt/boilerplate.t
 xt/dbix-connector.t
 xt/pod.t
+xt/time-piece.t
 META.yml                                 Module meta-data (added by MakeMaker)

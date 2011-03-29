@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1665';
+our $VERSION = '0.1666';
 
 use 5.008001;
 use strict;
@@ -23,7 +23,7 @@ our @COMMON_ARGS = qw/table query filter type/;
 
 __PACKAGE__->attr(
     [qw/data_source password pid user/],
-    cache => 1,
+    cache => 0,
     cache_method => sub {
         sub {
             my $self = shift;
@@ -371,7 +371,7 @@ sub create_model {
     # Set model
     $self->model($model->name, $model);
     
-    return $self;
+    return $self->model($model->name);
 }
 
 sub each_column {
@@ -1550,14 +1550,6 @@ L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki>
 
 =head1 ATTRIBUTES
 
-=head2 C<cache>
-
-    my $cache = $dbi->cache;
-    $dbi      = $dbi->cache(1);
-
-Enable caching L<DBIx::Custom::Query>,
-default to 1.
-
 =head2 C<data_source>
 
     my $data_source = $dbi->data_source;
@@ -1688,27 +1680,6 @@ You can set multiple filters at once.
         }
     );
 
-=head2 C<cache_method>
-
-    $dbi          = $dbi->cache_method(\&cache_method);
-    $cache_method = $dbi->cache_method
-
-Method to set and get cache.
-Default to the following one.
-
-    sub {
-        my $self = shift;
-        
-        $self->{_cached} ||= {};
-        
-        if (@_ > 1) {
-            $self->{_cached}{$_[0]} = $_[1];
-        }
-        else {
-            return $self->{_cached}{$_[0]};
-        }
-    }
-
 =head2 C<connect>
 
     my $dbi = DBIx::Custom->connect(
@@ -1726,7 +1697,7 @@ and C<PrintError> option is false by default.
 
 =head2 create_model
 
-    $dbi->create_model(
+    my $model = $dbi->create_model(
         table => 'book',
         primary_key => 'id',
         join => [
@@ -1742,7 +1713,7 @@ and C<PrintError> option is false by default.
     );
 
 Create L<DBIx::Custom::Model> object and initialize model.
-the module is used from model() method.
+the module is also used from model() method.
 
    $dbi->model('book')->select(...);
 

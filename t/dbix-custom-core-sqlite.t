@@ -66,6 +66,7 @@ my $update_query;
 my $ret_val;
 my $infos;
 my $model;
+my $model2;
 my $where;
 my $update_param;
 my $insert_param;
@@ -513,6 +514,7 @@ ok(! $result->fetch_first, "rollback");
 
 test 'cache';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->cache(1);
 $dbi->execute($CREATE_TABLE->{0});
 $source = 'select * from table1 where {= key1} and {= key2};';
 $dbi->create_query($source);
@@ -1952,7 +1954,7 @@ $dbi->create_model(
     ],
     primary_key => ['key1']
 );
-$dbi->create_model(
+$model2 = $dbi->create_model(
     table => 'table2'
 );
 $dbi->create_model(
@@ -1971,4 +1973,15 @@ $result = $model->select(
 );
 is_deeply($result->fetch_hash_first,
           {key1 => 1, key2 => 2, 'table2__key1' => 1, 'table2__key3' => 3});
+is_deeply($model2->select->fetch_hash_first, {key1 => 1, key3 => 3});
 
+test 'model method';
+test 'create_model';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{2});
+$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 3});
+$model = $dbi->create_model(
+    table => 'table2'
+);
+$model->method(foo => sub { shift->select(@_) });
+is_deeply($model->foo->fetch_hash_first, {key1 => 1, key3 => 3});
