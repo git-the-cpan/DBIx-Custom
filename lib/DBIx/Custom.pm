@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1669';
+our $VERSION = '0.1670';
 
 use 5.008001;
 use strict;
@@ -840,8 +840,27 @@ sub register_filter {
 
 sub register_tag { shift->query_builder->register_tag(@_) }
 
+sub replace {
+    my ($self, $join, $search, $replace) = @_;
+    
+    my @replace_join;
+    my $is_replaced;
+    foreach my $j (@$join) {
+        if ($search eq $j) {
+            push @replace_join, $replace;
+            $is_replaced = 1;
+        }
+        else {
+            push @replace_join, $j;
+        }
+    }
+    croak qq{Can't replace "$search" with "$replace"} unless $is_replaced;
+    
+    return @replace_join;
+}
+
 our %SELECT_ARGS
-  = map { $_ => 1 } @COMMON_ARGS, qw/column where append relation join/;
+  = map { $_ => 1 } @COMMON_ARGS, qw/column where append relation join param/;
 
 sub select {
     my ($self, %args) = @_;
@@ -867,6 +886,7 @@ sub select {
     croak qq{"join" must be array reference}
       unless ref $join eq 'ARRAY';
     my $relation = delete $args{relation};
+    my $param = delete $args{param} || {};
     
     # Add relation tables(DEPRECATED!);
     $self->_add_relation_table($tables, $relation);
@@ -875,58 +895,14 @@ sub select {
     my @sql;
     push @sql, 'select';
     
+    # Column clause
     if ($columns) {
-
         $columns = [$columns] if ! ref $columns;
-        
-        if (ref $columns eq 'HASH') {
-            # Find tables
-            my $main_table;
-            my %tables;
-            if ($columns->{table}) {
-                foreach my $table (@{$columns->{table}}) {
-                    if (($table || '') eq $tables->[-1]) {
-                        $main_table = $table;
-                    }
-                    else {
-                        $tables{$table} = 1;
-                    }
-                }
-            }
-            elsif ($columns->{all}) {
-                $main_table = $tables->[-1] || '';
-                foreach my $j (@$join) {
-                    my $tables = $self->_tables($j);
-                    foreach my $table (@$tables) {
-                        $tables{$table} = 1;
-                    }
-                }
-                delete $tables{$main_table};
-            }
-            
-            push @sql, $columns->{prepend} if $columns->{prepend};
-            
-            # Column clause of main table
-            if ($main_table) {
-                push @sql, $self->model($main_table)->mycolumn;
-                push @sql, ',';
-            }
-            
-            # Column cluase of other tables
-            foreach my $table (keys %tables) {
-                unshift @$tables, $table;
-                push @sql, $self->model($table)->column($table);
-                push @sql, ',';
-            }
-            pop @sql if $sql[-1] eq ',';
+        foreach my $column (@$columns) {
+            unshift @$tables, @{$self->_tables($column)};
+            push @sql, ($column, ',');
         }
-        else {
-            foreach my $column (@$columns) {
-                unshift @$tables, @{$self->_tables($column)};
-                push @sql, ($column, ',');
-            }
-            pop @sql if $sql[-1] eq ',';
-        }
+        pop @sql if $sql[-1] eq ',';
     }
     
     # "*" is default
@@ -949,10 +925,14 @@ sub select {
     
     # Main table
     croak "Not found table name" unless $tables->[-1];
+
+    # Add table names in param
+    unshift @$tables, @{$self->_tables(join(' ', keys %$param) || '')};
     
     # Where
     my $w = $self->_where($where);
-    $where = $w->param;
+    $param = keys %$param ? $self->merge_param($param, $w->param)
+                         : $w->param;
     
     # String where
     my $swhere = "$w";
@@ -982,7 +962,7 @@ sub select {
     # Execute query
     my $result = $self->execute(
         $query,
-        param  => $where, 
+        param  => $param, 
         table => $tables,
         %args
     );
@@ -1352,8 +1332,8 @@ sub _push_join {
         
         my $join_clause = $join->[$i];
         my $q_re = quotemeta($q);
-        my $join_re = $q ? qr/\s$q_re?([^\.\s$q_re]+?)$q_re?\..+\s$q_re?([^\.\s$q_re]+?)$q_re?\..+?$/
-                         : qr/\s([^\.\s]+?)\..+\s([^\.\s]+?)\..+?$/;
+        my $join_re = $q ? qr/\s$q_re?([^\.\s$q_re]+?)$q_re?\..+?\s$q_re?([^\.\s$q_re]+?)$q_re?\..+?$/
+                         : qr/\s([^\.\s]+?)\..+?\s([^\.\s]+?)\..+?$/;
         if ($join_clause =~ $join_re) {
             
             my $table1 = $1;
@@ -1399,6 +1379,9 @@ sub _where {
         $w = $where;
     }
     elsif (ref $where eq 'ARRAY') {
+        warn "\$dbi->select(where => [CLAUSE, PARAMETER]) is DEPRECATED." .
+             "use \$dbi->select(where => \$dbi->where(clause => " .
+             "CLAUSE, param => PARAMETER));";
         $w = $self->where(
             clause => $where->[0],
             param  => $where->[1]
@@ -2362,6 +2345,21 @@ Column names is
 
     ['title', 'author']
 
+=head2 C<replace> EXPERIMENTAL
+    
+    my $join = [
+        'left outer join table2 on table1.key1 = table2.key1',
+        'left outer join table3 on table2.key3 = table3.key3'
+    ];
+    $join = $dbi->replace(
+        $join,
+        'left outer join table2 on table1.key1 = table2.key1',
+        'left outer join (select * from table2 where {= table2.key1}) ' . 
+          'as table2 on table1.key1 = table2.key1'
+    );
+
+Replace join clauses if match the expression.
+
 =head2 C<select>
 
     my $result = $dbi->select(
@@ -2396,47 +2394,6 @@ Default is '*' unless C<column> is specified.
 
     # Default
     $dbi->select(column => '*');
-
-You can use hash option in C<column>
-
-=over 4
-
-=item all EXPERIMENTAL
-
-Colum clause, contains all columns of joined table. This is true or false value
-
-    $dbi->select(column => {all => 1});
-
-If main table is C<book> and joined table is C<company>,
-This create the following column clause.
-
-    book.author as author
-    book.company_id as company_id
-    company.id as company__id
-    company.name as company__name
-
-Columns of main table is consist of only column name,
-Columns of joined table is consist of table and column name joined C<__>.
-
-Note that this option is failed unless modles is included and
-C<columns> attribute is set.
-
-    # Generally do the following way before using all_column option
-    $dbi->include_model('MyModel')->setup_model;
-
-=item table EXPERIMENTAL
-
-You can also specify table names by C<table> option
-
-    $dbi->select(column => {table => ['book', 'company']});
-
-=item prepend EXPERIMENTAL
-
-You can add before created statement
-
-    $dbi->select(column => {prepend => 'SOME', all => 1});
-
-=back
 
 =item C<where>
 
@@ -2491,6 +2448,22 @@ In above select, the following SQL is created.
     from book
       left outer join company on book.company_id = company.id
     where company.name = Orange
+
+=item C<param> EXPERIMETNAL
+
+Parameter shown before where clause.
+    
+    $dbi->select(
+        table => 'table1',
+        column => 'table1.key1 as table1_key1, key2, key3',
+        where   => {'table1.key2' => 3},
+        join  => ['inner join (select * from table2 where {= table2.key3})' . 
+                  ' as table2 on table1.key1 = table2.key1'],
+        param => {'table2.key3' => 5}
+    );
+
+For example, if you want to contain tag in join clause, 
+you can pass parameter by C<param> option.
 
 =item C<append>
 

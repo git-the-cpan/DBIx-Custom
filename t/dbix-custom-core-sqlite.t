@@ -6,6 +6,8 @@ use utf8;
 use Encode qw/encode_utf8 decode_utf8/;
 use Data::Dumper;
 
+$SIG{__WARN__} = sub { warn $_[0] unless $_[0] =~ /DEPRECATED/};
+
 BEGIN {
     eval { require DBD::SQLite; 1 }
         or plan skip_all => 'DBD::SQLite required';
@@ -70,6 +72,7 @@ my $model2;
 my $where;
 my $update_param;
 my $insert_param;
+my $join;
 
 # Prepare table
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
@@ -1932,7 +1935,6 @@ $rows = $dbi->select(
 is_deeply($rows, [{table1_key1 => 1, table2_key1 => 1, key2 => 2, key3 => 5}],
           'reserved_word_quote');
 
-test 'model join and column attribute and all_column option';
 {
     package MyDBI8;
     
@@ -1946,22 +1948,6 @@ test 'model join and column attribute and all_column option';
         return $self;
     }
 }
-$dbi = MyDBI8->connect($NEW_ARGS->{0});
-$dbi->execute($CREATE_TABLE->{0});
-$dbi->execute($CREATE_TABLE->{2});
-$dbi->setup_model;
-$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
-$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 3});
-$model = $dbi->model('table1');
-$result = $model->select_at(
-    column => {table => ['table1', 'table2'], prepend => 'table1.key1 as key1_1,'},
-    where => 1
-);
-is_deeply($result->fetch_hash_first,
-          {key1_1 => 1, key1 => 1, key2 => 2, table2__key1 => 1, table2__key3 => 3});
-$result = $model->select(column => {all => 1});
-is_deeply($result->fetch_hash_first,
-          {key1 => 1, key2 => 2, table2__key1 => 1, table2__key3 => 3});
 
 test 'mycolumn';
 $dbi = MyDBI8->connect($NEW_ARGS->{0});
@@ -2103,3 +2089,55 @@ test 'merge_param';
     my $param = $dbi->merge_param($param1, $param2, $param3);
     is_deeply($param, {key1 => [1, 1, 1], key2 => [2, 2], key3 => 3});
 }
+
+test 'select() param option';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table1', param => {key1 => 2, key2 => 3});
+$dbi->execute($CREATE_TABLE->{2});
+$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 4});
+$dbi->insert(table => 'table2', param => {key1 => 2, key3 => 5});
+$rows = $dbi->select(
+    table => 'table1',
+    column => 'table1.key1 as table1_key1, key2, key3',
+    where   => {'table1.key2' => 3},
+    join  => ['inner join (select * from table2 where {= table2.key3})' . 
+              ' as table2 on table1.key1 = table2.key1'],
+    param => {'table2.key3' => 5}
+)->fetch_hash_all;
+is_deeply($rows, [{table1_key1 => 2, key2 => 3, key3 => 5}]);
+
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->reserved_word_quote('"');
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table1', param => {key1 => 2, key2 => 3});
+$dbi->execute($CREATE_TABLE->{2});
+$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 4});
+$dbi->insert(table => 'table2', param => {key1 => 2, key3 => 5});
+$join = ['inner join table2 on "table1"."key1" = "table2"."key1"'];
+$join = $dbi->replace(
+    $join,
+    'inner join table2 on "table1"."key1" = "table2"."key1"',
+    'inner join (select * from table2 where {= table2.key3}) as table2'
+);
+
+$rows = $dbi->select(
+    table => 'table1',
+    column => 'table1.key1 as table1_key1, key2, key3',
+    where   => {'table1.key2' => 3},
+    join  => ['inner join table2 on "table1"."key1" = "table2"."key1"'],
+    param => {'table2.key3' => 5}
+)->fetch_hash_all;
+is_deeply($rows, [{table1_key1 => 2, key2 => 3, key3 => 5}]);
+
+$join = ['inner join table2 on "table1"."key1" = "table2"."key1"'];
+eval {
+    $join = $dbi->replace(
+        $join,
+        'pppp inner join table2 on "table1"."key1" = "table2"."key1"',
+        'inner join (select * from table2 where {= table2.key3}) as table2'
+    );
+};
+like($@, qr/replace/);
