@@ -39,7 +39,6 @@ t/dbix-custom-mysql-private.t
 t/dbix-custom-query.t
 t/dbix-custom-querybuilder.t
 t/dbix-custom-result-sqlite.t
-t/dbix-custom-sqlite.t
 xt/boilerplate.t
 xt/dbix-connector.t
 xt/pod.t
