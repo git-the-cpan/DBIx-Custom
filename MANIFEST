@@ -3,11 +3,9 @@ lib/DBIx/Custom.pm
 lib/DBIx/Custom/Guide.pod
 lib/DBIx/Custom/Guide/Ja.pod
 lib/DBIx/Custom/Model.pm
-lib/DBIx/Custom/MySQL.pm
 lib/DBIx/Custom/Query.pm
 lib/DBIx/Custom/QueryBuilder.pm
 lib/DBIx/Custom/Result.pm
-lib/DBIx/Custom/SQLite.pm
 lib/DBIx/Custom/Tag.pm
 lib/DBIx/Custom/Util.pm
 lib/DBIx/Custom/Where.pm
