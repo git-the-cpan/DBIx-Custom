@@ -19,6 +19,20 @@ __PACKAGE__->attr(
     reserved_word_quote => ''
 );
 
+sub new {
+    my $self = shift->SUPER::new(@_);
+    
+    # Check attribute names
+    my @attrs = keys %$self;
+    foreach my $attr (@attrs) {
+        croak qq{"$attr" is invalid attribute name}
+            . qq{ (DBIx::Custom::Where::new) }
+          unless $self->can($attr);
+    }
+    
+    return $self;
+}
+
 sub to_string {
     my $self = shift;
     
@@ -49,7 +63,7 @@ sub _parse {
         
         # Operation
         my $op = $clause->[0] || '';
-        croak qq{"$op" is invalid operation}
+        croak qq{"$op" is invalid operation (DBIx::Custom::Where::to_string)}
           unless $VALID_OPERATIONS{$op};
         
         # Parse internal clause
@@ -70,18 +84,28 @@ sub _parse {
     
     # String
     else {
+        # Pushed
+        my $pushed;
         
         # Column
         my $columns = $self->query_builder->build_query($clause)->columns;
-        croak qq{Each tag contains one column name: tag "$clause"}
-          unless @$columns == 1;
+        if (@$columns == 0) {
+            push @$where, $clause;
+            $pushed = 1;
+            return $pushed;
+        }
+        elsif (@$columns != 1) {
+            croak qq{Each tag contains one column name: tag "$clause" }
+                  . "(DBIx::Custom::Where::to_string)"
+        }
+
         my $column = $columns->[0];
         if (my $q = $self->reserved_word_quote) {
             $column =~ s/$q//g;
         }
         
         my $safety = $self->safety_character;
-        croak qq{"$column" is not safety column name}
+        croak qq{"$column" is not safety column name (DBIx::Custom::Where::to_string)}
           unless $column =~ /^[$safety\.]+$/;
         
         # Column count up
@@ -89,7 +113,6 @@ sub _parse {
         
         # Push
         my $param = $self->param;
-        my $pushed;
         if (ref $param eq 'HASH') {
             if (exists $param->{$column}) {
                 if (ref $param->{$column} eq 'ARRAY') {
@@ -107,8 +130,10 @@ sub _parse {
             push @$where, $clause;
             $pushed = 1;
         }
-        else { croak "Parameter must be hash reference or undfined value" }
-        
+        else {
+            croak "Parameter must be hash reference or undfined value "
+                . "(DBIx::Custom::Where::to_string)"
+        }
         return $pushed;
     }
 }

@@ -599,7 +599,7 @@ $dbi->execute($CREATE_TABLE->{0});
 }
 
 eval{$dbi->execute('select * from table1', no_exists => 1)};
-like($@, qr/name/, "invald SQL");
+like($@, qr/wrong/, "invald SQL");
 
 $query = $dbi->create_query('select * from table1 where {= key1}');
 $dbi->dbh->disconnect;
@@ -1249,6 +1249,18 @@ $result = $dbi->select(
 $row = $result->fetch_hash_all;
 is_deeply($row, [{key1 => 1, key2 => 2}], 'not_exists');
 
+$where = $dbi->where
+             ->clause(['and', 'key1 is not null', 'key2 is not null' ]);
+$result = $dbi->select(
+    table => 'table1',
+    where => $where,
+);
+$row = $result->fetch_hash_all;
+is_deeply($row, [{key1 => 1, key2 => 2}, {key1 => 3, key2 => 4}], 'not_exists');
+
+eval {$dbi->where(ppp => 1) };
+like($@, qr/invalid/);
+
 test 'dbi_option default';
 $dbi = DBIx::Custom->new;
 is_deeply($dbi->dbi_option, {});
@@ -1316,7 +1328,7 @@ $dbi->method({one => sub { 1 }});
 is($dbi->one, 1);
 
 eval{DBIx::Custom->connect()};
-like($@, qr/connect/);
+like($@, qr/dbh/);
 
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
@@ -1650,6 +1662,15 @@ eval {
     );
 };
 like($@, qr/must be/);
+
+eval {
+    $result = $dbi->select_at(
+        table => 'table1',
+        primary_key => ['key1', 'key2'],
+        where => [1],
+    );
+};
+like($@, qr/same/);
 
 eval {
     $result = $dbi->update_at(
