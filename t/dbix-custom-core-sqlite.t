@@ -1328,7 +1328,7 @@ $dbi->method({one => sub { 1 }});
 is($dbi->one, 1);
 
 eval{DBIx::Custom->connect()};
-like($@, qr/dbh/);
+like($@, qr/_connect/);
 
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
@@ -2150,3 +2150,42 @@ $dbi->select(
 )
 };
 like($@, qr/array/);
+
+test 'select() string where';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table1', param => {key1 => 2, key2 => 3});
+$rows = $dbi->select(
+    table => 'table1',
+    where => '{= key1} and {= key2}',
+    where_param => {key1 => 1, key2 => 2}
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2}]);
+
+test 'delete() string where';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table1', param => {key1 => 2, key2 => 3});
+$dbi->delete(
+    table => 'table1',
+    where => '{= key1} and {= key2}',
+    where_param => {key1 => 1, key2 => 2}
+);
+$rows = $dbi->select(table => 'table1')->fetch_hash_all;
+is_deeply($rows, [{key1 => 2, key2 => 3}]);
+
+
+test 'update() string where';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->update(
+    table => 'table1',
+    param => {key1 => 5},
+    where => '{= key1} and {= key2}',
+    where_param => {key1 => 1, key2 => 2}
+);
+$rows = $dbi->select(table => 'table1')->fetch_hash_all;
+is_deeply($rows, [{key1 => 5, key2 => 2}]);

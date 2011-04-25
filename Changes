@@ -1,3 +1,6 @@
+0.1680
+    - DEPRECATED select() param option, this is renamed to where_param
+    - added select(), update(), and delete() where_param option
 0.1679
     - added EXPERIMENTAL select() wrap option to support Oracle ROWNUM
 0.1678
