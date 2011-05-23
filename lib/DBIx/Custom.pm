@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1681';
+our $VERSION = '0.1682';
 
 use 5.008001;
 use strict;
@@ -17,9 +17,10 @@ use DBIx::Custom::Where;
 use DBIx::Custom::Model;
 use DBIx::Custom::Tag;
 use DBIx::Custom::Util qw/_array_to_hash _subname/;
-use Encode qw/encode_utf8 decode_utf8/;
+use Encode qw/encode encode_utf8 decode_utf8/;
 
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
+use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
 our @COMMON_ARGS = qw/table query filter type/;
 
@@ -528,8 +529,19 @@ sub execute {
                         . qq{$query->{sql}\n} . _subname);
     }
     
-    # Output SQL for debug
-    warn $query->sql . "\n" if DEBUG;
+    # DEBUG message
+    if (DEBUG) {
+        print STDERR "SQL:\n" . $query->sql . "\n";
+        my @output;
+        foreach my $b (@$bind) {
+            my $value = $b->{value};
+            $value = 'undef' unless defined $value;
+            $value = encode(DEBUG_ENCODING(), $value)
+              if utf8::is_utf8($value);
+            push @output, $value;
+        }
+        print STDERR "Bind values: " . join(', ', @output) . "\n\n";
+    }
     
     # Select statement
     if ($sth->{NUM_OF_FIELDS}) {
@@ -730,21 +742,24 @@ sub merge_param {
     my ($self, @params) = @_;
     
     # Merge parameters
-    my $param = {};
-    foreach my $p (@params) {
-        foreach my $column (keys %$p) {
-            if (exists $param->{$column}) {
-                $param->{$column} = [$param->{$column}]
-                  unless ref $param->{$column} eq 'ARRAY';
-                push @{$param->{$column}}, $p->{$column};
+    my $merge = {};
+    foreach my $param (@params) {
+        foreach my $column (keys %$param) {
+            my $param_is_array = ref $param->{$column} eq 'ARRAY' ? 1 : 0;
+            
+            if (exists $merge->{$column}) {
+                $merge->{$column} = [$merge->{$column}]
+                  unless ref $merge->{$column} eq 'ARRAY';
+                push @{$merge->{$column}},
+                  ref $param->{$column} ? @{$param->{$column}} : $param->{$column};
             }
             else {
-                $param->{$column} = $p->{$column};
+                $merge->{$column} = $param->{$column};
             }
         }
     }
     
-    return $param;
+    return $merge;
 }
 
 sub method {
@@ -2831,7 +2846,11 @@ Updata parameter tag.
 =head2 C<DBIX_CUSTOM_DEBUG>
 
 If environment variable C<DBIX_CUSTOM_DEBUG> is set to true,
-executed SQL is printed to STDERR.
+executed SQL and bind values are printed to STDERR.
+
+=head2 C<DBIX_CUSTOM_DEBUG_ENCODING>
+
+DEBUG output encoding. Default to UTF-8.
 
 =head1 STABILITY
 
