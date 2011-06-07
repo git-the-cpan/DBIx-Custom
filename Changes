@@ -1,3 +1,13 @@
+0.1684
+    - added DBIx::Custom::Result all method, this is alias for fetch_hash_all
+    - added DBIx::Custom::Result one method, this is alias for fetch_hash_first
+    - DBIx::Custom::Result fetch_hash_first can recieve argument
+    - select() column option can receive hash reference
+    - update_param_tag is DEPRECATED! use update_param instead.
+    - insert_param_tag is DEPRECATED! use insert_param instead.
+    - assing_param_tag is DEPRECATED! use assign_param instead.
+    - Tag system such as {? title}, {= title} is DEPRECATED!
+      and added paramter system such as :title.
 0.1683
     - data_source is DEPRECATED! It is renamed to dsn
 0.1682

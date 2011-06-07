@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1683';
+our $VERSION = '0.1684';
 
 use 5.008001;
 use strict;
@@ -152,8 +152,7 @@ sub apply_filter {
     return $self;
 }
 
-
-sub assign_tag {
+sub assign_param {
     my ($self, $param) = @_;
     
     # Create set tag
@@ -163,9 +162,9 @@ sub assign_tag {
     foreach my $column (keys %$param) {
         croak qq{"$column" is not safety column name } . _subname
           unless $column =~ /^[$safety\.]+$/;
-        my $column = "$q$column$q";
-        $column =~ s/\./$q.$q/;
-        push @params, "$column = {? $column}";
+        my $column_quote = "$q$column$q";
+        $column_quote =~ s/\./$q.$q/;
+        push @params, "$column_quote = :$column";
     }
     my $tag = join(', ', @params);
     
@@ -560,7 +559,6 @@ sub execute {
         my $result = $self->result_class->new(
             sth            => $sth,
             filters        => $self->filters,
-            filter_check   => $self->filter_check,
             default_filter => $self->{default_in_filter},
             filter         => $filter->{in} || {},
             end_filter     => $filter->{end} || {}
@@ -595,20 +593,9 @@ sub insert {
     # Reserved word quote
     my $q = $self->reserved_word_quote;
     
-    # Columns
-    my @columns;
-    my $safety = $self->safety_character;
-    foreach my $column (keys %$param) {
-        croak qq{"$column" is not safety column name } . _subname
-          unless $column =~ /^[$safety\.]+$/;
-          $column = "$q$column$q";
-          $column =~ s/\./$q.$q/;
-        push @columns, $column;
-    }
-    
     # Insert statement
     my @sql;
-    push @sql, "insert into $q$table$q {insert_param ". join(' ', @columns) . '}';
+    push @sql, "insert into $q$table$q " . $self->insert_param($param);
     push @sql, $append if $append;
     my $sql = join (' ', @sql);
     
@@ -649,7 +636,7 @@ sub insert_at {
     return $self->insert(param => $param, %args);
 }
 
-sub insert_param_tag {
+sub insert_param {
     my ($self, $param) = @_;
     
     # Create insert parameter tag
@@ -660,10 +647,10 @@ sub insert_param_tag {
     foreach my $column (keys %$param) {
         croak qq{"$column" is not safety column name } . _subname
           unless $column =~ /^[$safety\.]+$/;
-        $column = "$q$column$q";
-        $column =~ s/\./$q.$q/;
-        push @columns, $column;
-        push @placeholders, "{? $column}";
+        my $column_quote = "$q$column$q";
+        $column_quote =~ s/\./$q.$q/;
+        push @columns, $column_quote;
+        push @placeholders, ":$column";
     }
     
     return '(' . join(', ', @columns) . ') ' . 'values ' .
@@ -838,8 +825,6 @@ sub register_filter {
     return $self;
 }
 
-sub register_tag { shift->query_builder->register_tag(@_) }
-
 our %SELECT_ARGS
   = map { $_ => 1 } @COMMON_ARGS,
                     qw/column where append relation join param where_param wrap/;
@@ -859,8 +844,10 @@ sub select {
     croak qq{"join" must be array reference } . _subname
       unless ref $join eq 'ARRAY';
     my $relation = delete $args{relation};
+    warn "select() relation option is DEPRECATED! use join option instead"
+      if $relation;
     my $param = delete $args{param} || {}; # DEPRECATED!
-    warn "DEPRECATED select() param option. this is renamed to where_param"
+    warn "select() param option is DEPRECATED! use where_param option instead"
       if keys %$param;
     my $where_param = delete $args{where_param} || $param || {};
     my $query_return = $args{query};
@@ -881,8 +868,9 @@ sub select {
     
     # Column clause
     if ($columns) {
-        $columns = [$columns] if ! ref $columns;
+        $columns = [$columns] unless ref $columns eq 'ARRAY';
         foreach my $column (@$columns) {
+            $column = $self->column(%$column) if ref $column eq 'HASH';
             unshift @$tables, @{$self->_search_tables($column)};
             push @sql, ($column, ',');
         }
@@ -1030,21 +1018,9 @@ sub update {
         croak qq{"$name" is wrong option } . _subname
           unless $UPDATE_ARGS{$name};
     }
-    
-    # Columns
-    my @columns;
-    my $safety = $self->safety_character;
-    my $q = $self->reserved_word_quote;
-    foreach my $column (keys %$param) {
-        croak qq{"$column" is not safety column name } . _subname
-          unless $column =~ /^[$safety\.]+$/;
-          $column = "$q$column$q";
-          $column =~ s/\./$q.$q/;
-        push @columns, "$column";
-    }
         
     # Update clause
-    my $update_clause = '{update_param ' . join(' ', @columns) . '}';
+    my $update_clause = $self->update_param($param);
 
     # Where
     my $where_clause = '';
@@ -1066,6 +1042,7 @@ sub update {
     
     # Update statement
     my @sql;
+    my $q = $self->reserved_word_quote;
     push @sql, "update $q$table$q $update_clause $where_clause";
     push @sql, $append if $append;
     
@@ -1112,11 +1089,11 @@ sub update_at {
     return $self->update(where => $where_param, %args);
 }
 
-sub update_param_tag {
+sub update_param {
     my ($self, $param, $opt) = @_;
     
     # Create update parameter tag
-    my $tag = $self->assign_tag($param);
+    my $tag = $self->assign_param($param);
     $tag = "set $tag" unless $opt->{no_set};
 
     return $tag;
@@ -1206,12 +1183,16 @@ sub _connect {
     my $self = shift;
     
     # Attributes
-    my $dsn = $self->data_source || $self->dsn;
+    my $dsn = $self->data_source;
+    warn "data_source is DEPRECATED! use dsn instead\n";
+    $dsn ||= $self->dsn;
     croak qq{"dsn" must be specified } . _subname
       unless $dsn;
     my $user        = $self->user;
     my $password    = $self->password;
     my $dbi_option = {%{$self->dbi_options}, %{$self->dbi_option}};
+    warn "dbi_options is DEPRECATED! use dbi_option instead\n"
+      if keys %{$self->dbi_options};
     
     # Connect
     my $dbh = eval {DBI->connect(
@@ -1340,9 +1321,9 @@ sub _where_to_obj {
         my $clause = ['and'];
         my $q = $self->reserved_word_quote;
         foreach my $column (keys %$where) {
-            $column = "$q$column$q";
-            $column =~ s/\./$q.$q/;
-            push @$clause, "{= $column}" for keys %$where;
+            my $column_quote = "$q$column$q";
+            $column_quote =~ s/\./$q.$q/;
+            push @$clause, "$column_quote = :$column" for keys %$where;
         }
         $obj = $self->where(clause => $clause, param => $where);
     }
@@ -1356,7 +1337,7 @@ sub _where_to_obj {
     elsif (ref $where eq 'ARRAY') {
         warn "\$dbi->select(where => [CLAUSE, PARAMETER]) is DEPRECATED." .
              "use \$dbi->select(where => \$dbi->where(clause => " .
-             "CLAUSE, param => PARAMETER));";
+             "CLAUSE, where_param => PARAMETER));";
         $obj = $self->where(
             clause => $where->[0],
             param  => $where->[1]
@@ -1373,6 +1354,12 @@ sub _where_to_obj {
 }
 
 # DEPRECATED!
+sub register_tag {
+    warn "register_tag is DEPRECATED!";
+    shift->query_builder->register_tag(@_)
+}
+
+# DEPRECATED!
 __PACKAGE__->attr('data_source');
 
 # DEPRECATED!
@@ -1384,6 +1371,8 @@ __PACKAGE__->attr(
 # DEPRECATED!
 sub default_bind_filter {
     my $self = shift;
+    
+    warn "default_bind_filter is DEPRECATED! use apply_filter instead\n";
     
     if (@_) {
         my $fname = $_[0];
@@ -1406,6 +1395,8 @@ sub default_bind_filter {
 # DEPRECATED!
 sub default_fetch_filter {
     my $self = shift;
+
+    warn "default_fetch_filter is DEPRECATED! use apply_filter instead\n";
     
     if (@_) {
         my $fname = $_[0];
@@ -1427,22 +1418,23 @@ sub default_fetch_filter {
 }
 
 # DEPRECATED!
-sub insert_param {
-    warn "insert_param is renamed to insert_param_tag."
-       . " insert_param is DEPRECATED!";
-    return shift->insert_param_tag(@_);
+sub insert_param_tag {
+    warn "insert_param_tag is DEPRECATED! " .
+         "use insert_param instead!";
+    return shift->insert_param(@_);
 }
 
 # DEPRECATED!
 sub register_tag_processor {
+    warn "register_tag_processor is DEPRECATED!";
     return shift->query_builder->register_tag_processor(@_);
 }
 
 # DEPRECATED!
-sub update_param {
-    warn "update_param is renamed to update_param_tag."
-       . " update_param is DEPRECATED!";
-    return shift->update_param_tag(@_);
+sub update_param_tag {
+    warn "update_param is DEPRECATED! " .
+         "use update_param instead";
+    return shift->update_param(@_);
 }
 # DEPRECATED!
 sub _push_relation {
@@ -1547,7 +1539,7 @@ DBIx::Custom - Useful database access, respecting SQL!
     
     # Execute SQL with parameter.
     $dbi->execute(
-        "select id from book where {= author} and {like title}",
+        "select id from book where author = :author and title like :title",
         param  => {author => 'ken', title => '%Perl%'}
     );
     
@@ -1758,15 +1750,15 @@ You can set multiple filters at once.
         }
     );
 
-=head2 C<assign_tag> EXPERIMENTAL
+=head2 C<assign_param> EXPERIMENTAL
 
-    my $assign_tag = $dbi->assign_tag({title => 'a', age => 2});
+    my $assign_param = $dbi->assign_param({title => 'a', age => 2});
 
 Create assign tag.
 
-    title = {? title}, author = {? author}
+    title = :title, author = :author
 
-This is equal to C<update_param_tag> exept that set is not added.
+This is equal to C<update_param> exept that set is not added.
 
 =head2 C<connect>
 
@@ -1848,7 +1840,7 @@ column name and column information.
 =head2 C<execute>
 
     my $result = $dbi->execute(
-        "select * from book where {= title} and {like author}",
+        "select * from book where title = :title and author like :author",
         param => {title => 'Perl', author => '%Ken%'}
     );
 
@@ -1943,14 +1935,14 @@ or array refrence, which contains where clause and paramter.
     
     # DBIx::Custom::Where object
     my $where = $dbi->where(
-        clause => ['and', '{= author}', '{like title}'],
+        clause => ['and', 'author = :author', 'title like :title'],
         param  => {author => 'Ken', title => '%Perl%'}
     );
     $dbi->delete(where => $where);
 
     # String(with where_param option)
     $dbi->delete(
-        where => '{like title}',
+        where => 'title like :title',
         where_param => {title => '%Perl%'}
     );
     
@@ -2190,13 +2182,13 @@ Place holders are set to 5 and 'Perl'.
 
 =back
 
-=head2 C<insert_param_tag>
+=head2 C<insert_param>
 
-    my $insert_param_tag = $dbi->insert_param_tag({title => 'a', age => 2});
+    my $insert_param = $dbi->insert_param({title => 'a', age => 2});
 
-Create insert parameter tag.
+Create insert parameters.
 
-    (title, author) values ({? title}, {? author});
+    (title, author) values (title = :title, age = :age);
 
 =head2 C<include_model>
 
@@ -2331,7 +2323,7 @@ This is used by C<clause> of L<DBIx::Custom::Where> .
     
 Register filters, used by C<filter> option of many methods.
 
-=head2 C<register_tag>
+=head2 C<register_tag> DEPRECATED!
 
     $dbi->register_tag(
         update => sub {
@@ -2391,16 +2383,31 @@ Table name.
 
 Column clause. This is array reference or constant value.
 
-    # Hash refernce
+    # Array reference
     $dbi->select(column => ['author', 'title']);
     
     # Constant value
     $dbi->select(column => 'author');
-
-Default is '*' unless C<column> is specified.
+    
+Default is '*' if C<column> is not specified.
 
     # Default
     $dbi->select(column => '*');
+
+You can specify hash reference.
+
+    # Hash reference
+    $dbi->select(column => [
+        {book => [qw/author title/]},
+        {person => [qw/name age/]}
+    ]);
+    
+This is expanded to the following one by C<column> method automatically.
+
+    book.author as book__author,
+    book.title as book__title,
+    person.name as person__name,
+    person.age as person__age
 
 =item C<where>
 
@@ -2412,14 +2419,14 @@ or array refrence, which contains where clause and paramter.
     
     # DBIx::Custom::Where object
     my $where = $dbi->where(
-        clause => ['and', '{= author}', '{like title}'],
+        clause => ['and', 'author = :author', 'title like :title'],
         param  => {author => 'Ken', title => '%Perl%'}
     );
     $dbi->select(where => $where);
 
     # String(with where_param option)
     $dbi->select(
-        where => '{like title}',
+        where => 'title like :title',
         where_param => {title => '%Perl%'}
     );
     
@@ -2462,7 +2469,7 @@ Parameter shown before where clause.
         table => 'table1',
         column => 'table1.key1 as table1_key1, key2, key3',
         where   => {'table1.key2' => 3},
-        join  => ['inner join (select * from table2 where {= table2.key3})' . 
+        join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
                   ' as table2 on table1.key1 = table2.key1'],
         param => {'table2.key3' => 5}
     );
@@ -2622,7 +2629,7 @@ or array refrence.
     
     # DBIx::Custom::Where object
     my $where = $dbi->where(
-        clause => ['and', '{= author}', '{like title}'],
+        clause => ['and', 'author = :author', 'title like :title'],
         param  => {author => 'Ken', title => '%Perl%'}
     );
     $dbi->update(where => $where);
@@ -2630,7 +2637,7 @@ or array refrence.
     # String(with where_param option)
     $dbi->update(
         param => {title => 'Perl'},
-        where => '{= id}',
+        where => 'id = :id'',
         where_param => {id => 2}
     );
     
@@ -2739,28 +2746,20 @@ Place holders are set to 'Perl' and 5.
 
 =back
 
-=head2 C<update_param_tag>
+=head2 C<update_param>
 
-    my $update_param_tag = $dbi->update_param_tag({title => 'a', age => 2});
+    my $update_param = $dbi->update_param({title => 'a', age => 2});
 
 Create update parameter tag.
 
-    set title = {? title}, author = {? author}
+    set title = :title, author = :author
 
-You can create tag without 'set '
-by C<no_set> option.
-
-    my $update_param_tag = $dbi->update_param_tag(
-        {title => 'a', age => 2}
-        {no_set => 1}
-    );
-
-    title = {? title}, author = {? author}
+C<no_set> option is DEPRECATED! use C<assing_param> instead.
 
 =head2 C<where>
 
     my $where = $dbi->where(
-        clause => ['and', '{= title}', '{= author}'],
+        clause => ['and', 'title = :title', 'author = :author'],
         param => {title => 'Perl', author => 'Ken'}
     );
 
@@ -2773,71 +2772,87 @@ Create a new L<DBIx::Custom::Where> object.
 Setup all model objects.
 C<columns> of model object is automatically set, parsing database information.
 
-=head1 Tags
+=head1 Parameter
+
+Parameter start at ':'. This is replaced to place holoder
+
+    $dbi->execute(
+        "select * from book where title = :title and author = :author"
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+    "select * from book where title = ? and author = ?"
+
+=head1 Tags DEPRECATED!
+
+B<Tag> system is DEPRECATED! use parameter system :name instead.
+Parameter is simple and readable.
+
+Note that you can't use both tag and paramter at same time.
 
 The following tags is available.
 
-=head2 C<?>
+=head2 C<?> DEPRECATED!
 
 Placeholder tag.
 
     {? NAME}    ->   ?
 
-=head2 C<=>
+=head2 C<=> DEPRECATED!
 
 Equal tag.
 
     {= NAME}    ->   NAME = ?
 
-=head2 C<E<lt>E<gt>>
+=head2 C<E<lt>E<gt>> DEPRECATED!
 
 Not equal tag.
 
     {<> NAME}   ->   NAME <> ?
 
-=head2 C<E<lt>>
+=head2 C<E<lt>> DEPRECATED!
 
 Lower than tag
 
     {< NAME}    ->   NAME < ?
 
-=head2 C<E<gt>>
+=head2 C<E<gt>> DEPRECATED!
 
 Greater than tag
 
     {> NAME}    ->   NAME > ?
 
-=head2 C<E<gt>=>
+=head2 C<E<gt>=> DEPRECATED!
 
 Greater than or equal tag
 
     {>= NAME}   ->   NAME >= ?
 
-=head2 C<E<lt>=>
+=head2 C<E<lt>=> DEPRECATED!
 
 Lower than or equal tag
 
     {<= NAME}   ->   NAME <= ?
 
-=head2 C<like>
+=head2 C<like> DEPRECATED!
 
 Like tag
 
     {like NAME}   ->   NAME like ?
 
-=head2 C<in>
+=head2 C<in> DEPRECATED!
 
 In tag.
 
     {in NAME COUNT}   ->   NAME in [?, ?, ..]
 
-=head2 C<insert_param>
+=head2 C<insert_param> DEPRECATED!
 
 Insert parameter tag.
 
     {insert_param NAME1 NAME2}   ->   (NAME1, NAME2) values (?, ?)
 
-=head2 C<update_param>
+=head2 C<update_param> DEPRECATED!
 
 Updata parameter tag.
 
@@ -2879,5 +2894,3 @@ This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
 =cut
-
-

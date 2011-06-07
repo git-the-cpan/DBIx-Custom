@@ -204,6 +204,37 @@ $rows = $result->fetch_hash_all;
 is_deeply($rows, [{key1 => 1, key2 => 1, key3 => 1, key4 => 1, key5 => 5},
                   {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10}], "basic");
 
+
+test 'parameter';
+$dbi->execute($DROP_TABLE->{0});
+$dbi->execute($CREATE_TABLE->{1});
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5});
+$dbi->insert(table => 'table1', param => {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10});
+
+$source = "select * from table1 where key1 = :key1 and key2 = :key2";
+$result = $dbi->execute($source, param => {key1 => 1, key2 => 2});
+$rows = $result->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5}]);
+
+$source = "select * from table1 where key1 = \n:key1\n and key2 = :key2";
+$result = $dbi->execute($source, param => {key1 => 1, key2 => 2});
+$rows = $result->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5}]);
+
+$source = "select * from table1 where key1 = :key1 or key1 = :key1";
+$result = $dbi->execute($source, param => {key1 => [1, 2]});
+$rows = $result->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5}]);
+
+$source = "select * from table1 where key1 = :table1.key1 and key2 = :table1.key2";
+$result = $dbi->execute(
+    $source,
+    param => {'table1.key1' => 1, 'table1.key2' => 1},
+    filter => {'table1.key2' => sub { $_[0] * 2 }}
+);
+$rows = $result->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5}]);
+
 test 'Error case';
 eval {DBIx::Custom->connect(dsn => 'dbi:SQLit')};
 ok($@, "connect error");
@@ -307,7 +338,7 @@ $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
 $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
 $where = $dbi->where;
-$where->clause(['and', '{= key1}', '{= key2}']);
+$where->clause(['and', 'key1 = :key1', 'key2 = :key2']);
 $where->param({key1 => 1, key2 => 2});
 $dbi->update(table => 'table1', param => {key1 => 3}, where => $where);
 $result = $dbi->select(table => 'table1');
@@ -535,7 +566,7 @@ $dbi->execute($CREATE_TABLE->{0});
 $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
 $result = $dbi->select(table => 'table1');
 $result->filter({key1 => 'three_times'});
-$row = $result->fetch_hash_first;
+$row = $result->one;
 is_deeply($row, {key1 => 3, key2 => 4}, "default_fetch_filter and filter");
 
 test 'filters';
@@ -555,7 +586,7 @@ $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
 $dbi->insert(table => 'table1', param => {key1 => 2, key2 => 3});
 $dbi->dbh->commit;
 $result = $dbi->select(table => 'table1');
-is_deeply(scalar $result->fetch_hash_all, [{key1 => 1, key2 => 2}, {key1 => 2, key2 => 3}],
+is_deeply(scalar $result->all, [{key1 => 1, key2 => 2}, {key1 => 2, key2 => 3}],
           "commit");
 
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
@@ -1047,7 +1078,7 @@ $row = $result->fetch_hash_all;
 is_deeply($row, [{key1 => 1, key2 => 2}, {key1 => 3, key2 => 4}]);
 
 $where = $dbi->where
-             ->clause(['and', ['or', '{> key1}', '{< key1}'], '{= key2}'])
+             ->clause(['and', ['or', 'key1 > :key1', 'key1 < :key1'], 'key2 = :key2'])
              ->param({key1 => [0, 3], key2 => 2});
 $result = $dbi->select(
     table => 'table1',
@@ -1354,7 +1385,7 @@ $dbi->default_bind_filter(undef);
 ok(!defined $dbi->default_bind_filter);
 $dbi->default_fetch_filter(undef);
 ok(!defined $dbi->default_fetch_filter);
-eval {$dbi->execute('select * from table1 {= author') };
+eval {$dbi->execute('select * from table1 {} {= author') };
 like($@, qr/Tag not finished/);
 
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
@@ -1792,20 +1823,20 @@ $result = $model->select(
 is_deeply($result->fetch_hash_first,
           {key1 => 1, key2 => 2, 'table2__key1' => 1, 'table2__key3' => 3});
 
-test 'update_param_tag';
+test 'update_param';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{1});
 $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5});
 $dbi->insert(table => 'table1', param => {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10});
 
 $param = {key2 => 11};
-$update_param = $dbi->update_param_tag($param);
+$update_param = $dbi->update_param($param);
 $sql = <<"EOS";
-update {table table1} $update_param
+update table1 $update_param
 where key1 = 1
 EOS
 $dbi->execute($sql, param => $param);
-$result = $dbi->execute($SELECT_SOURCES->{0});
+$result = $dbi->execute($SELECT_SOURCES->{0}, table => 'table1');
 $rows   = $result->fetch_hash_all;
 is_deeply($rows, [{key1 => 1, key2 => 11, key3 => 3, key4 => 4, key5 => 5},
                   {key1 => 6, key2 => 7,  key3 => 8, key4 => 9, key5 => 10}],
@@ -1818,13 +1849,13 @@ $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3, key4 
 $dbi->insert(table => 'table1', param => {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10});
 
 $param = {key2 => 11, key3 => 33};
-$update_param = $dbi->update_param_tag($param);
+$update_param = $dbi->update_param($param);
 $sql = <<"EOS";
-update {table table1} $update_param
+update table1 $update_param
 where key1 = 1
 EOS
 $dbi->execute($sql, param => $param);
-$result = $dbi->execute($SELECT_SOURCES->{0});
+$result = $dbi->execute($SELECT_SOURCES->{0}, table => 'table1');
 $rows   = $result->fetch_hash_all;
 is_deeply($rows, [{key1 => 1, key2 => 11, key3 => 33, key4 => 4, key5 => 5},
                   {key1 => 6, key2 => 7,  key3 => 8, key4 => 9, key5 => 10}],
@@ -1836,37 +1867,36 @@ $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3, key4 
 $dbi->insert(table => 'table1', param => {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10});
 
 $param = {key2 => 11, key3 => 33};
-$update_param = $dbi->update_param_tag($param, {no_set => 1});
+$update_param = $dbi->update_param($param, {no_set => 1});
 $sql = <<"EOS";
-update {table table1} set $update_param
+update table1 set $update_param
 where key1 = 1
 EOS
 $dbi->execute($sql, param => $param);
-$result = $dbi->execute($SELECT_SOURCES->{0});
+$result = $dbi->execute($SELECT_SOURCES->{0}, table => 'table1');
 $rows   = $result->fetch_hash_all;
 is_deeply($rows, [{key1 => 1, key2 => 11, key3 => 33, key4 => 4, key5 => 5},
                   {key1 => 6, key2 => 7,  key3 => 8, key4 => 9, key5 => 10}],
                   "update param no_set");
 
             
-eval { $dbi->update_param_tag({";" => 1}) };
+eval { $dbi->update_param({";" => 1}) };
 like($@, qr/not safety/);
 
 
-test 'set_tag';
-test 'update_param_tag';
+test 'update_param';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{1});
 $dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2, key3 => 3, key4 => 4, key5 => 5});
 $dbi->insert(table => 'table1', param => {key1 => 6, key2 => 7, key3 => 8, key4 => 9, key5 => 10});
 
 $param = {key2 => 11};
-$update_param = $dbi->assign_tag($param);
+$update_param = $dbi->assign_param($param);
 $sql = <<"EOS";
-update {table table1} set $update_param
+update table1 set $update_param
 where key1 = 1
 EOS
-$dbi->execute($sql, param => $param);
+$dbi->execute($sql, param => $param, table => 'table1');
 $result = $dbi->execute($SELECT_SOURCES->{0});
 $rows   = $result->fetch_hash_all;
 is_deeply($rows, [{key1 => 1, key2 => 11, key3 => 3, key4 => 4, key5 => 5},
@@ -1878,11 +1908,11 @@ test 'insert_param';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{1});
 $param = {key1 => 1, key2 => 2};
-$insert_param = $dbi->insert_param_tag($param);
+$insert_param = $dbi->insert_param($param);
 $sql = <<"EOS";
-insert into {table table1} $insert_param
+insert into table1 $insert_param
 EOS
-$dbi->execute($sql, param => $param);
+$dbi->execute($sql, param => $param, table => 'table1');
 is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1);
 is($dbi->select(table => 'table1')->fetch_hash_first->{key2}, 2);
 
@@ -1890,15 +1920,15 @@ $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
 $dbi->reserved_word_quote('"');
 $dbi->execute($CREATE_TABLE->{1});
 $param = {key1 => 1, key2 => 2};
-$insert_param = $dbi->insert_param_tag($param);
+$insert_param = $dbi->insert_param($param);
 $sql = <<"EOS";
-insert into {table table1} $insert_param
+insert into table1 $insert_param
 EOS
-$dbi->execute($sql, param => $param);
+$dbi->execute($sql, param => $param, table => 'table1');
 is($dbi->select(table => 'table1')->fetch_hash_first->{key1}, 1);
 is($dbi->select(table => 'table1')->fetch_hash_first->{key2}, 2);
 
-eval { $dbi->insert_param_tag({";" => 1}) };
+eval { $dbi->insert_param({";" => 1}) };
 like($@, qr/not safety/);
 
 
@@ -2027,10 +2057,20 @@ $result = $model->select_at(
 );
 is_deeply($result->fetch_hash_first,
           {key1 => 1, key2 => 2, table2__key1 => 1, table2__key3 => 3});
+
 $result = $model->select_at(
     column => [
         $model->mycolumn(['key1']),
         $model->column(table2 => ['key1'])
+    ]
+);
+is_deeply($result->fetch_hash_first,
+          {key1 => 1, table2__key1 => 1});
+
+$result = $model->select_at(
+    column => [
+        $model->mycolumn(['key1']),
+        {table2 => ['key1']}
     ]
 );
 is_deeply($result->fetch_hash_first,
@@ -2238,3 +2278,5 @@ $dbi->update(
 );
 $rows = $dbi->select(table => 'table1')->fetch_hash_all;
 is_deeply($rows, [{key1 => 5, key2 => 2}]);
+
+=cut
