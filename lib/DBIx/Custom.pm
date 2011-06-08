@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1684';
+our $VERSION = '0.1685';
 
 use 5.008001;
 use strict;
@@ -22,7 +22,7 @@ use Encode qw/encode encode_utf8 decode_utf8/;
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
-our @COMMON_ARGS = qw/table query filter type/;
+our @COMMON_ARGS = qw/table query filter type id primary_key/;
 
 __PACKAGE__->attr(
     [qw/connector dsn password user/],
@@ -302,8 +302,15 @@ sub delete {
     my $allow_delete_all = delete $args{allow_delete_all};
     my $query_return     = delete $args{query};
     my $where_param      = delete $args{where_param} || {};
-
+    my $id = delete $args{id};
+    my $primary_key = delete $args{primary_key};
+    croak "update method primary_key option " .
+          "must be specified when id is specified " . _subname
+      if defined $id && !defined $primary_key;
+    $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    
     # Where
+    $where = $self->_create_param_from_id($id, $primary_key) if $id;
     my $where_clause = '';
     if (ref $where) {
         $where = $self->_where_to_obj($where);
@@ -339,28 +346,6 @@ sub delete {
 }
 
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
-
-our %DELETE_AT_ARGS = (%DELETE_ARGS, where => 1, primary_key => 1);
-
-sub delete_at {
-    my ($self, %args) = @_;
-    
-    # Arguments
-    my $primary_keys = delete $args{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
-    my $where = delete $args{where};
-    
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $DELETE_AT_ARGS{$name};
-    }
-    
-    # Create where parameter
-    my $where_param = $self->_create_where_param($where, $primary_keys);
-    
-    return $self->delete(where => $where_param, %args);
-}
 
 sub DESTROY { }
 
@@ -571,23 +556,39 @@ sub execute {
     else { return $affected }
 }
 
-our %INSERT_ARGS = map { $_ => 1 } @COMMON_ARGS, qw/param append/;
+our %INSERT_ARGS = map { $_ => 1 } @COMMON_ARGS, qw/param/;
 
 sub insert {
-    my ($self, %args) = @_;
+    my $self = shift;
     
     # Arguments
+    my $param;
+    $param = shift if @_ % 2;
+    my %args = @_;
     my $table  = delete $args{table};
     croak qq{"table" option must be specified } . _subname
       unless $table;
-    my $param  = delete $args{param} || {};
+    my $p = delete $args{param} || {};
+    $param  ||= $p;
     my $append = delete $args{append} || '';
     my $query_return  = delete $args{query};
+    my $id = delete $args{id};
+    my $primary_key = delete $args{primary_key};
+    croak "insert method primary_key option " .
+          "must be specified when id is specified " . _subname
+      if defined $id && !defined $primary_key;
+    $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
 
     # Check arguments
     foreach my $name (keys %args) {
         croak qq{"$name" is wrong option } . _subname
           unless $INSERT_ARGS{$name};
+    }
+
+    # Merge parameter
+    if ($id) {
+        my $id_param = $self->_create_param_from_id($id, $primary_key);
+        $param = $self->merge_param($id_param, $param);
     }
 
     # Reserved word quote
@@ -610,30 +611,6 @@ sub insert {
         table => $table,
         %args
     );
-}
-
-our %INSERT_AT_ARGS = (%INSERT_ARGS, where => 1, primary_key => 1);
-
-sub insert_at {
-    my ($self, %args) = @_;
-
-    # Arguments
-    my $primary_keys = delete $args{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
-    my $where = delete $args{where};
-    my $param = delete $args{param};
-    
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $INSERT_AT_ARGS{$name};
-    }
-    
-    # Create where parameter
-    my $where_param = $self->_create_where_param($where, $primary_keys);
-    $param = $self->merge_param($where_param, $param);
-    
-    return $self->insert(param => $param, %args);
 }
 
 sub insert_param {
@@ -827,7 +804,7 @@ sub register_filter {
 
 our %SELECT_ARGS
   = map { $_ => 1 } @COMMON_ARGS,
-                    qw/column where append relation join param where_param wrap/;
+                    qw/column where relation join param where_param wrap/;
 
 sub select {
     my ($self, %args) = @_;
@@ -852,7 +829,13 @@ sub select {
     my $where_param = delete $args{where_param} || $param || {};
     my $query_return = $args{query};
     my $wrap = delete $args{wrap};
-
+    my $id = delete $args{id};
+    my $primary_key = delete $args{primary_key};
+    croak "update method primary_key option " .
+          "must be specified when id is specified " . _subname
+      if defined $id && !defined $primary_key;
+    $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    
     # Check arguments
     foreach my $name (keys %args) {
         croak qq{"$name" is wrong option } . _subname
@@ -902,6 +885,7 @@ sub select {
     
     # Where
     my $where_clause = '';
+    $where = $self->_create_param_from_id($id, $primary_key) if $id;
     if (ref $where) {
         $where = $self->_where_to_obj($where);
         $where_param = keys %$where_param
@@ -954,34 +938,6 @@ sub select {
     return $result;
 }
 
-our %SELECT_AT_ARGS = (%SELECT_ARGS, where => 1, primary_key => 1);
-
-sub select_at {
-    my ($self, %args) = @_;
-
-    # Arguments
-    my $primary_keys = delete $args{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
-    my $where = delete $args{where};
-    my $param = delete $args{param};
-    
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $SELECT_AT_ARGS{$name};
-    }
-    
-    # Table
-    croak qq{"table" option must be specified } . _subname
-      unless $args{table};
-    my $table = ref $args{table} ? $args{table}->[-1] : $args{table};
-    
-    # Create where parameter
-    my $where_param = $self->_create_where_param($where, $primary_keys);
-    
-    return $self->select(where => $where_param, %args);
-}
-
 sub setup_model {
     my $self = shift;
     
@@ -998,31 +954,42 @@ sub setup_model {
 }
 
 our %UPDATE_ARGS
-  = map { $_ => 1 } @COMMON_ARGS, qw/param where append allow_update_all where_param/;
+  = map { $_ => 1 } @COMMON_ARGS, qw/param where allow_update_all where_param/;
 
 sub update {
-    my ($self, %args) = @_;
+    my $self = shift;
 
     # Arguments
+    my $param;
+    $param = shift if @_ % 2;
+    my %args = @_;
     my $table = delete $args{table} || '';
     croak qq{"table" option must be specified } . _subname
       unless $table;
-    my $param            = delete $args{param} || {};
+    my $p = delete $args{param} || {};
+    $param  ||= $p;
     my $where            = delete $args{where} || {};
     my $where_param      = delete $args{where_param} || {};
     my $append           = delete $args{append} || '';
     my $allow_update_all = delete $args{allow_update_all};
+    my $id = delete $args{id};
+    my $primary_key = delete $args{primary_key};
+    croak "update method primary_key option " .
+          "must be specified when id is specified " . _subname
+      if defined $id && !defined $primary_key;
+    $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
     
     # Check argument names
     foreach my $name (keys %args) {
         croak qq{"$name" is wrong option } . _subname
           unless $UPDATE_ARGS{$name};
     }
-        
+
     # Update clause
     my $update_clause = $self->update_param($param);
 
     # Where
+    $where = $self->_create_param_from_id($id, $primary_key) if $id;
     my $where_clause = '';
     if (ref $where) {
         $where = $self->_where_to_obj($where);
@@ -1065,29 +1032,6 @@ sub update {
 }
 
 sub update_all { shift->update(allow_update_all => 1, @_) };
-
-our %UPDATE_AT_ARGS = (%UPDATE_ARGS, where => 1, primary_key => 1);
-
-sub update_at {
-    my ($self, %args) = @_;
-    
-    # Arguments
-    my $primary_keys = delete $args{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
-    my $where = delete $args{where};
-    
-
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $UPDATE_AT_ARGS{$name};
-    }
-    
-    # Create where parameter
-    my $where_param = $self->_create_where_param($where, $primary_keys);
-    
-    return $self->update(where => $where_param, %args);
-}
 
 sub update_param {
     my ($self, $param, $opt) = @_;
@@ -1156,27 +1100,25 @@ sub _create_bind_values {
     return $bind;
 }
 
-sub _create_where_param {
-    my ($self, $where, $primary_keys) = @_;
+sub _create_param_from_id {
+    my ($self, $id, $primary_keys) = @_;
     
-    # Create where parameter
-    my $where_param = {};
-    if ($where) {
-        $where = [$where] unless ref $where;
-        croak qq{"where" must be constant value or array reference}
+    # Create parameter
+    my $param = {};
+    if ($id) {
+        $id = [$id] unless ref $id;
+        croak qq{"id" must be constant value or array reference}
             . " (" . (caller 1)[3] . ")"
-          unless !ref $where || ref $where eq 'ARRAY';
-        
-        croak qq{"where" must contain values same count as primary key}
+          unless !ref $id || ref $id eq 'ARRAY';
+        croak qq{"id" must contain values same count as primary key}
             . " (" . (caller 1)[3] . ")"
-          unless @$primary_keys eq @$where;
-        
+          unless @$primary_keys eq @$id;
         for(my $i = 0; $i < @$primary_keys; $i ++) {
-           $where_param->{$primary_keys->[$i]} = $where->[$i];
+           $param->{$primary_keys->[$i]} = $id->[$i];
         }
     }
     
-    return $where_param;
+    return $param;
 }
 
 sub _connect {
@@ -1351,6 +1293,119 @@ sub _where_to_obj {
       unless ref $obj eq 'DBIx::Custom::Where';
     
     return $obj;
+}
+
+# DEPRECATED!
+our %SELECT_AT_ARGS = (%SELECT_ARGS, where => 1, primary_key => 1);
+sub select_at {
+    my ($self, %args) = @_;
+
+    warn "select_at is DEPRECATED! use update and id option instead";
+
+    # Arguments
+    my $primary_keys = delete $args{primary_key};
+    $primary_keys = [$primary_keys] unless ref $primary_keys;
+    my $where = delete $args{where};
+    my $param = delete $args{param};
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is wrong option } . _subname
+          unless $SELECT_AT_ARGS{$name};
+    }
+    
+    # Table
+    croak qq{"table" option must be specified } . _subname
+      unless $args{table};
+    my $table = ref $args{table} ? $args{table}->[-1] : $args{table};
+    
+    # Create where parameter
+    my $where_param = $self->_create_param_from_id($where, $primary_keys);
+    
+    return $self->select(where => $where_param, %args);
+}
+
+# DEPRECATED!
+our %DELETE_AT_ARGS = (%DELETE_ARGS, where => 1, primary_key => 1);
+sub delete_at {
+    my ($self, %args) = @_;
+
+    warn "delete_at is DEPRECATED! use update and id option instead";
+    
+    # Arguments
+    my $primary_keys = delete $args{primary_key};
+    $primary_keys = [$primary_keys] unless ref $primary_keys;
+    my $where = delete $args{where};
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is wrong option } . _subname
+          unless $DELETE_AT_ARGS{$name};
+    }
+    
+    # Create where parameter
+    my $where_param = $self->_create_param_from_id($where, $primary_keys);
+    
+    return $self->delete(where => $where_param, %args);
+}
+
+# DEPRECATED!
+our %UPDATE_AT_ARGS = (%UPDATE_ARGS, where => 1, primary_key => 1);
+sub update_at {
+    my $self = shift;
+
+    warn "update_at is DEPRECATED! use update and id option instead";
+    
+    # Arguments
+    my $param;
+    $param = shift if @_ % 2;
+    my %args = @_;
+    my $primary_keys = delete $args{primary_key};
+    $primary_keys = [$primary_keys] unless ref $primary_keys;
+    my $where = delete $args{where};
+    my $p = delete $args{param} || {};
+    $param  ||= $p;
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is wrong option } . _subname
+          unless $UPDATE_AT_ARGS{$name};
+    }
+    
+    # Create where parameter
+    my $where_param = $self->_create_param_from_id($where, $primary_keys);
+    
+    return $self->update(where => $where_param, param => $param, %args);
+}
+
+# DEPRECATED!
+our %INSERT_AT_ARGS = (%INSERT_ARGS, where => 1, primary_key => 1);
+sub insert_at {
+    my $self = shift;
+    
+    warn "insert_at is DEPRECATED! use insert and id option instead";
+    
+    # Arguments
+    my $param;
+    $param = shift if @_ % 2;
+    my %args = @_;
+    my $primary_key = delete $args{primary_key};
+    $primary_key = [$primary_key] unless ref $primary_key;
+    my $where = delete $args{where};
+    my $p = delete $args{param} || {};
+    $param  ||= $p;
+    
+    # Check arguments
+    foreach my $name (keys %args) {
+        croak qq{"$name" is wrong option } . _subname
+          unless $INSERT_AT_ARGS{$name};
+    }
+    
+    # Create where parameter
+    my $where_param = $self->_create_param_from_id($where, $primary_key);
+    $param = $self->merge_param($where_param, $param);
+    
+    return $self->insert(param => $param, %args);
 }
 
 # DEPRECATED!
@@ -1983,15 +2038,6 @@ filter name registerd by C<register_filter()>.
 
 These filters are added to the C<out> filters, set by C<apply_filter()>.
 
-=head2 C<column>
-
-    my $column = $self->column(book => ['author', 'title']);
-
-Create column clause. The follwoing column clause is created.
-
-    book.author as book__author,
-    book.title as book__title
-
 =item C<query>
 
 Get L<DBIx::Custom::Query> object instead of executing SQL.
@@ -2003,6 +2049,30 @@ You can check SQL.
 
     my $sql = $query->sql;
 
+=item C<id>
+
+Delete using primary_key.
+
+    $dbi->delete(
+        primary_key => 'id',
+        id => 4,
+    );
+
+    $dbi->delete(
+        primary_key => ['id1', 'id2'],
+        id => [4, 5],
+    );
+
+The above is same as the followin ones.
+
+    $dbi->delete(where => {id => 4});
+
+    $dbi->delete(where => {id1 => 4, id2 => 5});
+
+=item C<primary_key>
+
+See C<id> option.
+
 =back
 
 =head2 C<delete_all>
@@ -2012,77 +2082,34 @@ You can check SQL.
 Delete statement to delete all rows.
 Options is same as C<delete()>.
 
-=head2 C<delete_at()>
-
-Delete statement, using primary key.
-
-    $dbi->delete_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5'
-    );
-
-This method is same as C<delete()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<delete()> is available.
-
-=over 4
-
-=item C<primary_key>
-
-Primary key. This is constant value or array reference.
-    
-    # Constant value
-    $dbi->delete(primary_key => 'id');
-
-    # Array reference
-    $dbi->delete(primary_key => ['id1', 'id2' ]);
-
-This is used to create where clause.
-
-=item C<where>
-
-Where clause, created from primary key information.
-This is constant value or array reference.
-
-    # Constant value
-    $dbi->delete(where => 5);
-
-    # Array reference
-    $dbi->delete(where => [3, 5]);
-
-In first examle, the following SQL is created.
-
-    delete from book where id = ?;
-
-Place holder is set to 5.
-
-=back
-
 =head2 C<insert>
 
     $dbi->insert(
-        table  => 'book', 
-        param  => {title => 'Perl', author => 'Ken'}
+        param  => {title => 'Perl', author => 'Ken'},
+        table  => 'book'
     );
-
+    
 Insert statement.
 
 The following opitons are currently available.
 
 =over 4
 
-=item C<table>
-
-Table name.
-
-    $dbi->insert(table => 'book');
-
 =item C<param>
 
 Insert data. This is hash reference.
 
     $dbi->insert(param => {title => 'Perl'});
+
+If arguments is odd numbers, first argument is received as C<param>.
+
+    $dbi->insert({title => 'Perl', author => 'Ken'}, table => 'book');
+
+=item C<table>
+
+Table name.
+
+    $dbi->insert(table => 'book');
 
 =item C<append>
 
@@ -2134,53 +2161,7 @@ You can check SQL.
 
 =back
 
-=head2 C<insert_at()>
-
-Insert statement, using primary key.
-
-    $dbi->insert_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5',
-        param => {title => 'Perl'}
-    );
-
-This method is same as C<insert()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<insert()> is available.
-
 =over 4
-
-=item C<primary_key>
-
-Primary key. This is constant value or array reference.
-    
-    # Constant value
-    $dbi->insert(primary_key => 'id');
-
-    # Array reference
-    $dbi->insert(primary_key => ['id1', 'id2' ]);
-
-This is used to create parts of insert data.
-
-=item C<where>
-
-Parts of Insert data, create from primary key information.
-This is constant value or array reference.
-
-    # Constant value
-    $dbi->insert(where => 5);
-
-    # Array reference
-    $dbi->insert(where => [3, 5]);
-
-In first examle, the following SQL is created.
-
-    insert into book (id, title) values (?, ?);
-
-Place holders are set to 5 and 'Perl'.
-
-=back
 
 =head2 C<insert_param>
 
@@ -2323,42 +2304,6 @@ This is used by C<clause> of L<DBIx::Custom::Where> .
     
 Register filters, used by C<filter> option of many methods.
 
-=head2 C<register_tag> DEPRECATED!
-
-    $dbi->register_tag(
-        update => sub {
-            my @columns = @_;
-            
-            # Update parameters
-            my $s = 'set ';
-            $s .= "$_ = ?, " for @columns;
-            $s =~ s/, $//;
-            
-            return [$s, \@columns];
-        }
-    );
-
-Register tag, used by C<execute()>.
-
-See also L<Tags/Tags> about tag registered by default.
-
-Tag parser receive arguments specified in tag.
-In the following tag, 'title' and 'author' is parser arguments
-
-    {update_param title author} 
-
-Tag parser must return array refrence,
-first element is the result statement, 
-second element is column names corresponding to place holders.
-
-In this example, result statement is 
-
-    set title = ?, author = ?
-
-Column names is
-
-    ['title', 'author']
-
 =head2 C<select>
 
     my $result = $dbi->select(
@@ -2394,9 +2339,9 @@ Default is '*' if C<column> is not specified.
     # Default
     $dbi->select(column => '*');
 
-You can specify hash reference.
+You can specify hash reference. This is EXPERIMENTAL.
 
-    # Hash reference
+    # Hash reference EXPERIMENTAL
     $dbi->select(column => [
         {book => [qw/author title/]},
         {person => [qw/name age/]}
@@ -2482,6 +2427,30 @@ you can pass parameter by C<param> option.
 Append statement to last of SQL. This is string.
 
     $dbi->select(append => 'order by title');
+    
+=item C<id>
+
+Select using primary_key.
+
+    $dbi->select(
+        primary_key => 'id',
+        id => 4,
+    );
+
+    $dbi->select(
+        primary_key => ['id1', 'id2'],
+        id => [4, 5]
+    );
+
+The above is same as the followin ones.
+
+    $dbi->insert(where => {id => 4});
+
+    $dbi->insert(where => {id1 => 4, id2 => 5});
+
+=item C<primary_key>
+
+See C<id> option.
 
 =item C<wrap> EXPERIMENTAL
 
@@ -2546,53 +2515,6 @@ This is used to bind paramter by C<bind_param()> of statment handle.
 
 =back
 
-=head2 C<select_at()>
-
-Select statement, using primary key.
-
-    $dbi->select_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5'
-    );
-
-This method is same as C<select()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<select()> is available.
-
-=over 4
-
-=item C<primary_key>
-
-Primary key. This is constant value or array reference.
-    
-    # Constant value
-    $dbi->select(primary_key => 'id');
-
-    # Array reference
-    $dbi->select(primary_key => ['id1', 'id2' ]);
-
-This is used to create where clause.
-
-=item C<where>
-
-Where clause, created from primary key information.
-This is constant value or array reference.
-
-    # Constant value
-    $dbi->select(where => 5);
-
-    # Array reference
-    $dbi->select(where => [3, 5]);
-
-In first examle, the following SQL is created.
-
-    select * from book where id = ?
-
-Place holder is set to 5.
-
-=back
-
 =head2 C<update>
 
     $dbi->update(
@@ -2607,17 +2529,25 @@ The following opitons are currently available.
 
 =over 4
 
-=item C<table>
-
-Table name.
-
-    $dbi->update(table => 'book');
-
 =item C<param>
 
 Update data. This is hash reference.
 
     $dbi->update(param => {title => 'Perl'});
+
+If arguments is odd numbers, first argument is received as C<param>.
+
+    $dbi->update(
+        {title => 'Perl'},
+        table => 'book',
+        where => {author => 'Ken'}
+    );
+
+=item C<table>
+
+Table name.
+
+    $dbi->update(table => 'book');
 
 =item C<where>
 
@@ -2637,7 +2567,7 @@ or array refrence.
     # String(with where_param option)
     $dbi->update(
         param => {title => 'Perl'},
-        where => 'id = :id'',
+        where => 'id = :id',
         where_param => {id => 2}
     );
     
@@ -2689,6 +2619,62 @@ You can check SQL.
 
     my $sql = $query->sql;
 
+Insert using primary_key.
+
+    $dbi->insert(
+        primary_key => 'id',
+        id => 4,
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+    $dbi->insert(
+        primary_key => ['id1', 'id2'],
+        id => [4, 5],
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+The above is same as the followin ones.
+
+    $dbi->insert(
+        param => {id => 4, title => 'Perl', author => 'Ken'}
+    );
+
+    $dbi->insert(
+        param => {id1 => 4, id2 => 5, title => 'Perl', author => 'Ken'}
+    );
+
+=item C<id>
+
+update using primary_key.
+
+    $dbi->update(
+        primary_key => 'id',
+        id => 4,
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+    $dbi->update(
+        primary_key => ['id1', 'id2'],
+        id => [4, 5],
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+The above is same as the followin ones.
+
+    $dbi->update(
+        where => {id => 4}
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+    $dbi->update(
+        where => {id1 => 4, id2 => 5},
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+=item C<primary_key>
+
+See C<id> option.
+
 =back
 
 =head2 C<update_all>
@@ -2697,54 +2683,6 @@ You can check SQL.
 
 Update statement to update all rows.
 Options is same as C<update()>.
-
-=head2 C<update_at()>
-
-Update statement, using primary key.
-
-    $dbi->update_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5',
-        param => {title => 'Perl'}
-    );
-
-This method is same as C<update()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<update()> is available.
-
-=over 4
-
-=item C<primary_key>
-
-Primary key. This is constant value or array reference.
-    
-    # Constant value
-    $dbi->update(primary_key => 'id');
-
-    # Array reference
-    $dbi->update(primary_key => ['id1', 'id2' ]);
-
-This is used to create where clause.
-
-=item C<where>
-
-Where clause, created from primary key information.
-This is constant value or array reference.
-
-    # Constant value
-    $dbi->update(where => 5);
-
-    # Array reference
-    $dbi->update(where => [3, 5]);
-
-In first examle, the following SQL is created.
-
-    update book set title = ? where id = ?
-
-Place holders are set to 'Perl' and 5.
-
-=back
 
 =head2 C<update_param>
 
@@ -2771,6 +2709,85 @@ Create a new L<DBIx::Custom::Where> object.
 
 Setup all model objects.
 C<columns> of model object is automatically set, parsing database information.
+
+=head2 C<update_at()> DEPRECATED!
+
+Update statement, using primary key.
+
+    $dbi->update_at(
+        table => 'book',
+        primary_key => 'id',
+        where => '5',
+        param => {title => 'Perl'}
+    );
+
+This method is same as C<update()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<update()> is available.
+
+=head2 C<delete_at()> DEPRECATED!
+
+Delete statement, using primary key.
+
+    $dbi->delete_at(
+        table => 'book',
+        primary_key => 'id',
+        where => '5'
+    );
+
+This method is same as C<delete()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<delete()> is available.
+
+=head2 C<select_at()> DEPRECATED!
+
+Select statement, using primary key.
+
+    $dbi->select_at(
+        table => 'book',
+        primary_key => 'id',
+        where => '5'
+    );
+
+This method is same as C<select()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<select()> is available.
+
+=head2 C<register_tag> DEPRECATED!
+
+    $dbi->register_tag(
+        update => sub {
+            my @columns = @_;
+            
+            # Update parameters
+            my $s = 'set ';
+            $s .= "$_ = ?, " for @columns;
+            $s =~ s/, $//;
+            
+            return [$s, \@columns];
+        }
+    );
+
+Register tag, used by C<execute()>.
+
+See also L<Tags/Tags> about tag registered by default.
+
+Tag parser receive arguments specified in tag.
+In the following tag, 'title' and 'author' is parser arguments
+
+    {update_param title author} 
+
+Tag parser must return array refrence,
+first element is the result statement, 
+second element is column names corresponding to place holders.
+
+In this example, result statement is 
+
+    set title = ?, author = ?
+
+Column names is
+
+    ['title', 'author']
 
 =head1 Parameter
 
@@ -2857,6 +2874,21 @@ Insert parameter tag.
 Updata parameter tag.
 
     {update_param NAME1 NAME2}   ->   set NAME1 = ?, NAME2 = ?
+
+=head2 C<insert_at()> DEPRECATED!
+
+Insert statement, using primary key.
+
+    $dbi->insert_at(
+        table => 'book',
+        primary_key => 'id',
+        where => '5',
+        param => {title => 'Perl'}
+    );
+
+This method is same as C<insert()> exept that
+C<primary_key> is specified and C<where> is constant value or array refrence.
+all option of C<insert()> is available.
 
 =head1 ENVIRONMENT VARIABLE
 
