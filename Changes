@@ -1,3 +1,10 @@
+0.1686
+    - select() column option can receive array reference in array.
+      This is EXPERIMENTAL
+    - select() EXPERIMETNAL column option hash format
+      return table.column, not table__column
+    - added EXPERIMENTAL col method.
+    - set reserved_word_quote automatically from driver name
 0.1685
     - insert_at, update_at, delete_at, select_at is DEPRECATED!
       use insert, update, delete, select method and id option.
