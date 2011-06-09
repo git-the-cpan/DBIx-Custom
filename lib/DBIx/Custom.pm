@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1686';
+our $VERSION = '0.1687';
 
 use 5.008001;
 use strict;
@@ -22,7 +22,7 @@ use Encode qw/encode encode_utf8 decode_utf8/;
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
-our @COMMON_ARGS = qw/table query filter type id primary_key/;
+our @COMMON_ARGS = qw/table query filter type id primary_key type_rule_off/;
 
 __PACKAGE__->attr(
     [qw/connector dsn password user/],
@@ -324,7 +324,6 @@ sub delete {
     my $where            = delete $args{where} || {};
     my $append           = delete $args{append};
     my $allow_delete_all = delete $args{allow_delete_all};
-    my $query_return     = delete $args{query};
     my $where_param      = delete $args{where_param} || {};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
@@ -356,13 +355,9 @@ sub delete {
     push @sql, $append if $append;
     my $sql = join(' ', @sql);
     
-    # Create query
-    my $query = $self->create_query($sql);
-    return $query if $query_return;
-    
     # Execute query
     return $self->execute(
-        $query,
+        $sql,
         param => $where_param,
         table => $table,
         %args
@@ -432,16 +427,23 @@ sub each_column {
 our %EXECUTE_ARGS = map { $_ => 1 } @COMMON_ARGS, 'param';
 
 sub execute {
-    my ($self, $query, %args)  = @_;
+    my $self = shift;
+    my $query = shift;
+    my $param;
+    $param = shift if @_ % 2;
+    my %args = @_;
     
     # Arguments
-    my $param  = delete $args{param} || {};
+    my $p = delete $args{param} || {};
+    $param ||= $p;
     my $tables = delete $args{table} || [];
     $tables = [$tables] unless ref $tables eq 'ARRAY';
     my $filter = delete $args{filter};
     $filter = _array_to_hash($filter);
     my $type = delete $args{type};
     $type = _array_to_hash($type);
+    my $type_rule_off = delete $args{type_rule_off};
+    my $query_return = delete $args{query};
     
     # Check argument names
     foreach my $name (keys %args) {
@@ -451,6 +453,7 @@ sub execute {
     
     # Create query
     $query = $self->create_query($query) unless ref $query;
+    return $query if $query_return;
     $filter ||= $query->filter;
     
     # Tables
@@ -486,9 +489,30 @@ sub execute {
             }
         }
     }
+
+    # Type rule
+    my $applied_filter = {};
+    unless ($type_rule_off) {
+        foreach my $name (keys %$param) {
+            my $table;
+            my $column;
+            if ($name =~ /(?:(.+)\.)?(.+)/) {
+                $table = $1;
+                $column = $2;
+            }
+            $table ||= $main_table;
+            
+            my $into = $self->{_into} || {};
+            if (defined $table && $into->{$table} &&
+                (my $rule = $into->{$table}->{$column}))
+            {
+                $applied_filter->{$column} = $rule;
+                $applied_filter->{"$table.$column"} = $rule;
+            }
+        }
+    }
     
     # Applied filter
-    my $applied_filter = {};
     foreach my $table (@$tables) {
         $applied_filter = {
             %$applied_filter,
@@ -566,11 +590,13 @@ sub execute {
         
         # Result
         my $result = $self->result_class->new(
-            sth            => $sth,
-            filters        => $self->filters,
+            sth => $sth,
+            filters => $self->filters,
             default_filter => $self->{default_in_filter},
-            filter         => $filter->{in} || {},
-            end_filter     => $filter->{end} || {}
+            filter => $filter->{in} || {},
+            end_filter => $filter->{end} || {},
+            type_rule => $self->type_rule,
+            type_rule_off => $type_rule_off
         );
 
         return $result;
@@ -595,7 +621,6 @@ sub insert {
     my $p = delete $args{param} || {};
     $param  ||= $p;
     my $append = delete $args{append} || '';
-    my $query_return  = delete $args{query};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
     croak "insert method primary_key option " .
@@ -624,13 +649,9 @@ sub insert {
     push @sql, $append if $append;
     my $sql = join (' ', @sql);
     
-    # Create query
-    my $query = $self->create_query($sql);
-    return $query if $query_return;
-    
     # Execute query
     return $self->execute(
-        $query,
+        $sql,
         param => $param,
         table => $table,
         %args
@@ -851,7 +872,6 @@ sub select {
     warn "select() param option is DEPRECATED! use where_param option instead"
       if keys %$param;
     my $where_param = delete $args{where_param} || $param || {};
-    my $query_return = $args{query};
     my $wrap = delete $args{wrap};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
@@ -956,13 +976,9 @@ sub select {
     # SQL
     my $sql = join (' ', @sql);
     
-    # Create query
-    my $query = $self->create_query($sql);
-    return $query if $query_return;
-    
     # Execute query
     my $result = $self->execute(
-        $query,
+        $sql,
         param => $where_param, 
         table => $tables,
         %args
@@ -984,6 +1000,30 @@ sub setup_model {
         }
     );
     return $self;
+}
+
+sub type_rule {
+    my $self = shift;
+    
+    if (@_) {
+        my $type_rule = _array_to_hash([@_]);
+        $self->{type_rule} = $type_rule;
+        $self->{_into} ||= {};
+        $self->each_column(sub {
+            my ($dbi, $table, $column, $column_info) = @_;
+            
+            my $type = $column_info->{TYPE_NAME};
+            if ($type_rule->{$type} &&
+                (my $rule = $type_rule->{$type}->{into}))
+            {
+                $self->{_into}{$table}{$column} = $rule;
+            }
+        });
+        
+        return $self;
+    }
+    
+    return $self->{type_rule} || {};
 }
 
 our %UPDATE_ARGS
@@ -1049,13 +1089,9 @@ sub update {
     # SQL
     my $sql = join(' ', @sql);
     
-    # Create query
-    my $query = $self->create_query($sql);
-    return $query if $args{query};
-    
     # Execute query
     my $ret_val = $self->execute(
-        $query,
+        $sql,
         param  => $param, 
         table => $table,
         %args
@@ -1841,7 +1877,7 @@ You can set multiple filters at once.
 
     my $assign_param = $dbi->assign_param({title => 'a', age => 2});
 
-Create assign tag.
+Create assign parameter.
 
     title = :title, author = :author
 
@@ -1946,71 +1982,80 @@ column name and column information.
 
     my $result = $dbi->execute(
         "select * from book where title = :title and author like :author",
-        param => {title => 'Perl', author => '%Ken%'}
+        {title => 'Perl', author => '%Ken%'}
     );
 
-Execute SQL, containing tags.
-Return value is L<DBIx::Custom::Result> in select statement, or
-the count of affected rows in insert, update, delete statement.
+Execute SQL. SQL can contain parameter such as :author.
+Return value is L<DBIx::Custom::Result> when select statement is executed,
+or the count of affected rows in insert, update, delete statement is executed.
 
-Tag is turned into the statement containing place holder
-before SQL is executed.
+Parameter is replaced by placeholder C<?>.
 
     select * from where title = ? and author like ?;
 
-See also L<Tags/Tags>.
-
-The following opitons are currently available.
+The following opitons are available.
 
 =over 4
 
-=item C<table>
-
-Table names for filtering.
-
-    $dbi->execute(table => ['author', 'book']);
-
-C<execute()> is unlike C<insert()>, C<update()>, C<delete()>, C<select(),
-Filtering is off because we don't know what filter is applied.
-
-
-
-
-
-
 =item C<filter>
+    
+    filter => {
+        title  => sub { uc $_[0] }
+        author => sub { uc $_[0] }
+    }
 
-Filter, executed before data is send to database. This is array reference.
+    # Filter name
+    filter => {
+        title  => 'upper_case',
+        author => 'upper_case'
+    }
+        
+    # At once
+    filter => [
+        [qw/title author/]  => sub { uc $_[0] }
+    ]
+
+Filter, executed before data is saved into database.
 Filter value is code reference or
 filter name registerd by C<register_filter()>.
 
-    # Basic
-    $dbi->execute(
-        $sql,
-        filter => {
-            title  => sub { uc $_[0] }
-            author => sub { uc $_[0] }
-        }
-    );
-    
-    # At once (use array reference)
-    $dbi->execute(
-        $sql,
-        filter => [
-            [qw/title author/]  => sub { uc $_[0] }
-        ]
-    );
-    
-    # Filter name
-    $dbi->execute(
-        $sql,
-        filter => {
-            title  => 'upper_case',
-            author => 'upper_case'
-        }
-    );
-
 These filters are added to the C<out> filters, set by C<apply_filter()>.
+
+=item C<query>
+
+    query => 1
+
+C<execute> method return L<DBIx::Custom::Query> object, not executing SQL.
+
+=item C<table>
+    
+    table => 'author'
+    table => ['author', 'book']
+
+Table names for filtering.
+
+Filtering by C<apply_filter> is off in C<execute> method,
+because we don't know what filter is applied.
+
+=item C<type>
+
+Specify database data type.
+
+    type => [image => DBI::SQL_BLOB]
+    type => [[qw/image audio/] => DBI::SQL_BLOB]
+
+This is used to bind paramter by C<bind_param()> of statment handle.
+
+    $sth->bind_param($pos, $value, DBI::SQL_BLOB);
+
+C<type> option is also available
+by C<insert()>, C<update()>, C<delete()>, C<select()>.
+
+=item C<type_rule_off> EXPERIMENTAL
+
+    type_rule_off => 1
+
+Trun type rule off.
 
 =back
 
@@ -2018,110 +2063,61 @@ These filters are added to the C<out> filters, set by C<apply_filter()>.
 
     $dbi->delete(table => 'book', where => {title => 'Perl'});
 
-Delete statement.
+Execute delete statement.
 
-The following opitons are currently available.
+The following opitons are available.
 
 =over 4
 
-=item C<table>
-
-Table name.
-
-    $dbi->delete(table => 'book');
-
-=item C<where>
-
-Where clause. This is hash reference or L<DBIx::Custom::Where> object
-or array refrence, which contains where clause and paramter.
-    
-    # Hash reference
-    $dbi->delete(where => {title => 'Perl'});
-    
-    # DBIx::Custom::Where object
-    my $where = $dbi->where(
-        clause => ['and', 'author = :author', 'title like :title'],
-        param  => {author => 'Ken', title => '%Perl%'}
-    );
-    $dbi->delete(where => $where);
-
-    # String(with where_param option)
-    $dbi->delete(
-        where => 'title like :title',
-        where_param => {title => '%Perl%'}
-    );
-    
 =item C<append>
 
-Append statement to last of SQL. This is string.
-
-    $dbi->delete(append => 'order by title');
+Same as C<select> method's C<append> option.
 
 =item C<filter>
 
-Filter, executed before data is send to database. This is array reference.
-Filter value is code reference or
-filter name registerd by C<register_filter()>.
-
-    # Basic
-    $dbi->delete(
-        filter => {
-            title  => sub { uc $_[0] }
-            author => sub { uc $_[0] }
-        }
-    );
-    
-    # At once (use array reference)
-    $dbi->delete(
-        filter => [
-            [qw/title author/]  => sub { uc $_[0] }
-        ]
-    );
-    
-    # Filter name
-    $dbi->delete(
-        filter => {
-            title  => 'upper_case',
-            author => 'upper_case'
-        }
-    );
-
-These filters are added to the C<out> filters, set by C<apply_filter()>.
-
-=item C<query>
-
-Get L<DBIx::Custom::Query> object instead of executing SQL.
-This is true or false value.
-
-    my $query = $dbi->delete(query => 1);
-
-You can check SQL.
-
-    my $sql = $query->sql;
+Same as C<execute> method's C<filter> option.
 
 =item C<id>
 
-Delete using primary_key.
+    id => 4
+    id => [4, 5]
+
+ID corresponding to C<primary_key>.
+You can delete rows by C<id> and C<primary_key>.
 
     $dbi->delete(
-        primary_key => 'id',
-        id => 4,
-    );
-
-    $dbi->delete(
-        primary_key => ['id1', 'id2'],
+        parimary_key => ['id1', 'id2'],
         id => [4, 5],
+        table => 'book',
     );
 
-The above is same as the followin ones.
+The above is same as the followin one.
 
-    $dbi->delete(where => {id => 4});
+    $dbi->delete(where => {id1 => 4, id2 => 5}, table => 'book');
 
-    $dbi->delete(where => {id1 => 4, id2 => 5});
+=item C<query>
+
+Same as C<execute> method's C<query> option.
+
+=item C<table>
+
+    table => 'book'
+
+=item C<where>
+
+Same as C<select> method's C<where> option.
 
 =item C<primary_key>
 
 See C<id> option.
+
+=item C<type>
+
+Same as C<execute> method's C<type> option.
+
+=item C<type_rule_off> EXPERIMENTAL
+
+Same as C<execute> method's C<type_rule_off> option.
 
 =back
 
@@ -2129,85 +2125,84 @@ See C<id> option.
 
     $dbi->delete_all(table => $table);
 
-Delete statement to delete all rows.
+Execute delete statement for all rows.
 Options is same as C<delete()>.
 
 =head2 C<insert>
 
-    $dbi->insert(
-        param  => {title => 'Perl', author => 'Ken'},
-        table  => 'book'
-    );
-    
-Insert statement.
+    $dbi->insert({title => 'Perl', author => 'Ken'}, table  => 'book');
 
-The following opitons are currently available.
+Execute insert statement.
+
+The following opitons are available.
 
 =over 4
 
-=item C<param>
-
-Insert data. This is hash reference.
-
-    $dbi->insert(param => {title => 'Perl'});
-
-If arguments is odd numbers, first argument is received as C<param>.
-
-    $dbi->insert({title => 'Perl', author => 'Ken'}, table => 'book');
-
-=item C<table>
-
-Table name.
-
-    $dbi->insert(table => 'book');
-
 =item C<append>
 
-Append statement to last of SQL. This is string.
-
-    $dbi->insert(append => 'order by title');
+Same as C<select> method's C<append> option.
 
 =item C<filter>
 
-Filter, executed before data is send to database. This is array reference.
-Filter value is code reference or
-filter name registerd by C<register_filter()>.
+Same as C<execute> method's C<filter> option.
 
-    # Basic
+=item C<id>
+
+    id => 4
+    id => [4, 5]
+
+ID corresponding to C<primary_key>.
+You can insert a row by C<id> and C<primary_key>.
+
     $dbi->insert(
-        filter => {
-            title  => sub { uc $_[0] }
-            author => sub { uc $_[0] }
-        }
-    );
-    
-    # At once (use array reference)
-    $dbi->insert(
-        filter => [
-            [qw/title author/]  => sub { uc $_[0] }
-        ]
-    );
-    
-    # Filter name
-    $dbi->insert(
-        filter => {
-            title  => 'upper_case',
-            author => 'upper_case'
-        }
+        {title => 'Perl', author => 'Ken'}
+        parimary_key => ['id1', 'id2'],
+        id => [4, 5],
+        table => 'book'
     );
 
-These filters are added to the C<out> filters, set by C<apply_filter()>.
+The above is same as the followin one.
+
+    $dbi->insert(
+        {id1 => 4, id2 => 5, title => 'Perl', author => 'Ken'},
+        table => 'book'
+    );
+
+=item C<primary_key>
+
+    primary_key => 'id'
+    primary_key => ['id1', 'id2']
+
+Primary key. This is used by C<id> option.
+
+=item C<param>
+
+    param => {title => 'Perl', author => 'Ken'}
+
+Insert data.
+
+If C<insert> method's arguments is odd numbers,
+first argument is received as C<param>.
+
+    $dbi->insert({title => 'Perl', author => 'Ken'}, table => 'book');
 
 =item C<query>
 
-Get L<DBIx::Custom::Query> object instead of executing SQL.
-This is true or false value.
+Same as C<execute> method's C<query> option.
 
-    my $query = $dbi->insert(query => 1);
+=item C<table>
 
-You can check SQL.
+    table => 'book'
 
-    my $sql = $query->sql;
+Table name.
+
+=item C<type>
+
+Same as C<execute> method's C<type> option.
+
+=item C<type_rule_off> EXPERIMENTAL
+
+Same as C<execute> method's C<type_rule_off> option.
 
 =back
 
@@ -2354,6 +2349,21 @@ This is used by C<clause> of L<DBIx::Custom::Where> .
     
 Register filters, used by C<filter> option of many methods.
 
+=head2 C<type_rule> EXPERIMENTAL
+
+    $dbi->type_rule(
+        DATE => {
+            from => sub { ... },
+            into => sub { ... }
+        },
+        DATETIME => {
+            from => sub { ... }
+            into => sub { ... }
+        }
+    );
+
+Filter based on type.
+
 =head2 C<select>
 
     my $result = $dbi->select(
@@ -2362,92 +2372,99 @@ Register filters, used by C<filter> option of many methods.
         where  => {author => 'Ken'},
     );
     
-Select statement.
+Execute select statement.
 
-The following opitons are currently available.
+The following opitons are available.
 
 =over 4
 
-=item C<table>
+=item C<append>
 
-Table name.
+    append => 'order by title'
 
-    $dbi->select(table => 'book');
-
+Append statement to last of SQL.
+    
 =item C<column>
-
-Column clause. This is array reference or constant value.
-
-    # Array reference
-    $dbi->select(column => ['author', 'title']);
     
-    # Constant value
-    $dbi->select(column => 'author');
+    column => 'author'
+    column => ['author', 'title']
+
+Column clause.
     
-Default is '*' if C<column> is not specified.
+if C<column> is not specified, '*' is set.
 
-    # Default
-    $dbi->select(column => '*');
+    column => '*'
 
-You can specify hash reference. This is EXPERIMENTAL.
+You can specify hash reference in array reference. This is EXPERIMENTAL.
 
-    # Hash reference EXPERIMENTAL
-    $dbi->select(column => [
+    column => [
         {book => [qw/author title/]},
         {person => [qw/name age/]}
-    ]);
+    ]
 
-This is expanded to the following one by C<col> method automatically.
+This is expanded to the following one by using C<col> method.
 
     book.author as "book.author",
     book.title as "book.title",
     person.name as "person.name",
     person.age as "person.age"
 
-You can specify array reference in array refernce.
+You can specify array reference in array reference.
 
-    $dbi->select(column => [
+    column => [
         ['date(book.register_datetime)', as => 'book.register_date']
-    ]);
+    ];
 
-These is joined and quoted.
+Alias is quoted and joined.
 
     date(book.register_datetime) as "book.register_date"
 
-=item C<where>
+=item C<filter>
 
-Where clause. This is hash reference or L<DBIx::Custom::Where> object,
-or array refrence, which contains where clause and paramter.
-    
-    # Hash reference
-    $dbi->select(where => {author => 'Ken', 'title' => 'Perl'});
-    
-    # DBIx::Custom::Where object
-    my $where = $dbi->where(
-        clause => ['and', 'author = :author', 'title like :title'],
-        param  => {author => 'Ken', title => '%Perl%'}
-    );
-    $dbi->select(where => $where);
+Same as C<execute> method's C<filter> option.
 
-    # String(with where_param option)
+=item C<id>
+
+    id => 4
+    id => [4, 5]
+
+ID corresponding to C<primary_key>.
+You can select rows by C<id> and C<primary_key>.
+
     $dbi->select(
-        where => 'title like :title',
-        where_param => {title => '%Perl%'}
+        parimary_key => ['id1', 'id2'],
+        id => [4, 5],
+        table => 'book'
+    );
+
+The above is same as the followin one.
+
+    $dbi->select(
+        where => {id1 => 4, id2 => 5},
+        table => 'book'
     );
     
+=item C<param> EXPERIMETNAL
+
+    param => {'table2.key3' => 5}
+
+Parameter shown before where clause.
+    
+For example, if you want to contain tag in join clause, 
+you can pass parameter by C<param> option.
+
+    join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
+              ' as table2 on table1.key1 = table2.key1']
+
 =item C<join>
 
-Join clause used in need. This is array reference.
-
-    $dbi->select(join =>
-        [
-            'left outer join company on book.company_id = company_id',
-            'left outer join location on company.location_id = location.id'
-        ]
-    );
-
-If column cluase or where clause contain table name like "company.name",
-needed join clause is used automatically.
+    join => [
+        'left outer join company on book.company_id = company_id',
+        'left outer join location on company.location_id = location.id'
+    ]
+        
+Join clause. If column cluase or where clause contain table name like "company.name",
+join clausees needed when SQL is created is used automatically.
 
     $dbi->select(
         table => 'book',
@@ -2459,59 +2476,56 @@ needed join clause is used automatically.
         ]
     );
 
-In above select, the following SQL is created.
+In above select, column and where clause contain "company" table,
+the following SQL is created
 
     select company.location_id as company__location_id
     from book
       left outer join company on book.company_id = company.id
     where company.name = Orange
 
-=item C<param> EXPERIMETNAL
-
-Parameter shown before where clause.
-    
-    $dbi->select(
-        table => 'table1',
-        column => 'table1.key1 as table1_key1, key2, key3',
-        where   => {'table1.key2' => 3},
-        join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
-                  ' as table2 on table1.key1 = table2.key1'],
-        param => {'table2.key3' => 5}
-    );
-
-For example, if you want to contain tag in join clause, 
-you can pass parameter by C<param> option.
-
-=item C<append>
-
-Append statement to last of SQL. This is string.
-
-    $dbi->select(append => 'order by title');
-    
-=item C<id>
-
-Select using primary_key.
-
-    $dbi->select(
-        primary_key => 'id',
-        id => 4,
-    );
-
-    $dbi->select(
-        primary_key => ['id1', 'id2'],
-        id => [4, 5]
-    );
-
-The above is same as the followin ones.
-
-    $dbi->insert(where => {id => 4});
-
-    $dbi->insert(where => {id1 => 4, id2 => 5});
-
 =item C<primary_key>
 
-See C<id> option.
+    primary_key => 'id'
+    primary_key => ['id1', 'id2']
 
+Primary key. This is used by C<id> option.
+
+=item C<query>
+
+Same as C<execute> method's C<query> option.
+
+=item C<type>
+
+Same as C<execute> method's C<type> option.
+
+=item C<table>
+
+    table => 'book'
+
+Table name.
+
+=item C<type_rule_off> EXPERIMENTAL
+
+Same as C<execute> method's C<type_rule_off> option.
+
+=item C<where>
+    
+    # Hash refrence
+    where => {author => 'Ken', 'title' => 'Perl'}
+    
+    # DBIx::Custom::Where object
+    where => $dbi->where(
+        clause => ['and', 'author = :author', 'title like :title'],
+        param  => {author => 'Ken', title => '%Perl%'}
+    );
+
+    # String(with where_param option)
+    where => 'title like :title',
+    where_param => {title => '%Perl%'}
+
+Where clause.
+    
 =item C<wrap> EXPERIMENTAL
 
 Wrap statement. This is array reference.
@@ -2520,220 +2534,87 @@ Wrap statement. This is array reference.
 
 This option is for Oracle and SQL Server paging process.
 
-=item C<filter>
-
-Filter, executed before data is send to database. This is array reference.
-Filter value is code reference or
-filter name registerd by C<register_filter()>.
-
-    # Basic
-    $dbi->select(
-        filter => {
-            title  => sub { uc $_[0] }
-            author => sub { uc $_[0] }
-        }
-    );
-    
-    # At once (use array reference)
-    $dbi->select(
-        filter => [
-            [qw/title author/]  => sub { uc $_[0] }
-        ]
-    );
-    
-    # Filter name
-    $dbi->select(
-        filter => {
-            title  => 'upper_case',
-            author => 'upper_case'
-        }
-    );
-
-These filters are added to the C<out> filters, set by C<apply_filter()>.
-
-=item C<query>
-
-Get L<DBIx::Custom::Query> object instead of executing SQL.
-This is true or false value.
-
-    my $query = $dbi->select(query => 1);
-
-You can check SQL.
-
-    my $sql = $query->sql;
-
-=item C<type>
-
-Specify database data type.
-
-    $dbi->select(type => [image => DBI::SQL_BLOB]);
-    $dbi->select(type => [[qw/image audio/] => DBI::SQL_BLOB]);
-
-This is used to bind paramter by C<bind_param()> of statment handle.
-
-    $sth->bind_param($pos, $value, DBI::SQL_BLOB);
-
 =back
 
 =head2 C<update>
 
-    $dbi->update(
-        table  => 'book',
-        param  => {title => 'Perl'},
-        where  => {id => 4}
-    );
+    $dbi->update({title => 'Perl'}, table  => 'book', where  => {id => 4});
 
-Update statement.
+Execute update statement.
 
-The following opitons are currently available.
+The following opitons are available.
 
 =over 4
 
-=item C<param>
-
-Update data. This is hash reference.
-
-    $dbi->update(param => {title => 'Perl'});
-
-If arguments is odd numbers, first argument is received as C<param>.
-
-    $dbi->update(
-        {title => 'Perl'},
-        table => 'book',
-        where => {author => 'Ken'}
-    );
-
-=item C<table>
-
-Table name.
-
-    $dbi->update(table => 'book');
-
-=item C<where>
-
-Where clause. This is hash reference or L<DBIx::Custom::Where> object
-or array refrence.
-    
-    # Hash reference
-    $dbi->update(where => {author => 'Ken', 'title' => 'Perl'});
-    
-    # DBIx::Custom::Where object
-    my $where = $dbi->where(
-        clause => ['and', 'author = :author', 'title like :title'],
-        param  => {author => 'Ken', title => '%Perl%'}
-    );
-    $dbi->update(where => $where);
-    
-    # String(with where_param option)
-    $dbi->update(
-        param => {title => 'Perl'},
-        where => 'id = :id',
-        where_param => {id => 2}
-    );
-    
 =item C<append>
 
-Append statement to last of SQL. This is string.
-
-    $dbi->update(append => 'order by title');
+Same as C<select> method's C<append> option.
 
 =item C<filter>
 
-Filter, executed before data is send to database. This is array reference.
-Filter value is code reference or
-filter name registerd by C<register_filter()>.
-
-    # Basic
-    $dbi->update(
-        filter => {
-            title  => sub { uc $_[0] }
-            author => sub { uc $_[0] }
-        }
-    );
-    
-    # At once (use array reference)
-    $dbi->update(
-        filter => [
-            [qw/title author/]  => sub { uc $_[0] }
-        ]
-    );
-    
-    # Filter name
-    $dbi->update(
-        filter => {
-            title  => 'upper_case',
-            author => 'upper_case'
-        }
-    );
-
-These filters are added to the C<out> filters, set by C<apply_filter()>.
-
-=item C<query>
-
-Get L<DBIx::Custom::Query> object instead of executing SQL.
-This is true or false value.
-
-    my $query = $dbi->update(query => 1);
-
-You can check SQL.
-
-    my $sql = $query->sql;
-
-Insert using primary_key.
-
-    $dbi->insert(
-        primary_key => 'id',
-        id => 4,
-        param => {title => 'Perl', author => 'Ken'}
-    );
-
-    $dbi->insert(
-        primary_key => ['id1', 'id2'],
-        id => [4, 5],
-        param => {title => 'Perl', author => 'Ken'}
-    );
-
-The above is same as the followin ones.
-
-    $dbi->insert(
-        param => {id => 4, title => 'Perl', author => 'Ken'}
-    );
-
-    $dbi->insert(
-        param => {id1 => 4, id2 => 5, title => 'Perl', author => 'Ken'}
-    );
+Same as C<execute> method's C<filter> option.
 
 =item C<id>
 
-update using primary_key.
+    id => 4
+    id => [4, 5]
+
+ID corresponding to C<primary_key>.
+You can update rows by C<id> and C<primary_key>.
 
     $dbi->update(
-        primary_key => 'id',
-        id => 4,
-        param => {title => 'Perl', author => 'Ken'}
-    );
-
-    $dbi->update(
-        primary_key => ['id1', 'id2'],
+        {title => 'Perl', author => 'Ken'}
+        parimary_key => ['id1', 'id2'],
         id => [4, 5],
-        param => {title => 'Perl', author => 'Ken'}
+        table => 'book'
     );
 
-The above is same as the followin ones.
+The above is same as the followin one.
 
     $dbi->update(
-        where => {id => 4}
-        param => {title => 'Perl', author => 'Ken'}
-    );
-
-    $dbi->update(
+        {title => 'Perl', author => 'Ken'}
         where => {id1 => 4, id2 => 5},
-        param => {title => 'Perl', author => 'Ken'}
+        table => 'book'
     );
+
+=item C<param>
+
+    param => {title => 'Perl'}
+
+Update data.
+
+If C<update> method's arguments is odd numbers, first argument is received as C<param>.
+
+    $dbi->update({title => 'Perl'}, table => 'book', where => {id => 2});
 
 =item C<primary_key>
 
-See C<id> option.
+    primary_key => 'id'
+    primary_key => ['id1', 'id2']
+
+Primary key. This is used by C<id> option.
+
+=item C<query>
+
+Same as C<execute> method's C<query> option.
+
+=item C<table>
+
+    table => 'book'
+
+Table name.
+
+=item C<where>
+
+Same as C<select> method's C<where> option.
+
+=item C<type>
+
+Same as C<execute> method's C<type> option.
+
+=item C<type_rule_off> EXPERIMENTAL
+
+Turn type rule off.
 
 =back
 
@@ -2741,7 +2622,7 @@ See C<id> option.
 
     $dbi->update_all(table => 'book', param => {title => 'Perl'});
 
-Update statement to update all rows.
+Execute update statement for all rows.
 Options is same as C<update()>.
 
 =head2 C<update_param>
