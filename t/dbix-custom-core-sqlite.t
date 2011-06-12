@@ -2583,8 +2583,8 @@ is_deeply($result->one,
 test 'type_rule from';
 $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->type_rule(
-    Date => {
-        from => sub { uc $_[0] }
+    from => {
+        Date => sub { uc $_[0] }
     }
 );
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
@@ -2600,8 +2600,8 @@ test 'type_rule into';
 $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
 $dbi->type_rule(
-    Date => {
-        into => sub { uc $_[0] }
+    into => {
+        Date => sub { uc $_[0] }
     }
 );
 $dbi->insert({key1 => 'a'}, table => 'table1');
@@ -2611,9 +2611,9 @@ is($result->one->{key1}, 'A');
 $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
 $dbi->type_rule(
-    [qw/Date datetime/] => {
-        into => sub { uc $_[0] }
-    }
+    into => [
+         [qw/Date datetime/] => sub { uc $_[0] }
+    ]
 );
 $dbi->insert({key1 => 'a', key2 => 'b'}, table => 'table1');
 $result = $dbi->select(table => 'table1');
@@ -2625,9 +2625,9 @@ $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
 $dbi->insert({key1 => 'a', key2 => 'B'}, table => 'table1');
 $dbi->type_rule(
-    [qw/Date datetime/] => {
-        into => sub { uc $_[0] }
-    }
+    into => [
+        [qw/Date datetime/] => sub { uc $_[0] }
+    ]
 );
 $result = $dbi->execute(
     "select * from table1 where key1 = :key1 and key2 = :table1.key2;",
@@ -2641,9 +2641,9 @@ $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
 $dbi->insert({key1 => 'A', key2 => 'B'}, table => 'table1');
 $dbi->type_rule(
-    [qw/Date datetime/] => {
-        into => sub { uc $_[0] }
-    }
+    into => [
+        [qw/Date datetime/] => sub { uc $_[0] }
+    ]
 );
 $result = $dbi->execute(
     "select * from table1 where key1 = :key1 and key2 = :table1.key2;",
@@ -2659,9 +2659,11 @@ test 'type_rule_off';
 $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
 $dbi->type_rule(
-    Date => {
-        from => sub { $_[0] * 2 },
-        into => sub { $_[0] * 3 },
+    from => {
+        Date => sub { $_[0] * 2 },
+    },
+    into => {
+        Date => sub { $_[0] * 2 },
     }
 );
 $dbi->insert({key1 => 2}, table => 'table1', type_rule_off => 1);
@@ -2671,13 +2673,120 @@ is($result->fetch->[0], 2);
 $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
 $dbi->execute("create table table1 (key1 Date, key2 datetime)");
 $dbi->type_rule(
-    Date => {
-        from => sub { $_[0] * 2 },
-        into => sub { $_[0] * 3 },
+    from => {
+        DATE => sub { $_[0] * 2 },
+    },
+    into => {
+        DATE => sub { $_[0] * 3 },
     }
 );
 $dbi->insert({key1 => 2}, table => 'table1', type_rule_off => 1);
 $result = $dbi->select(table => 'table1', type_rule_off => 1);
 is($result->one->{key1}, 2);
+
+$dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
+$dbi->execute("create table table1 (key1 Date, key2 datetime)");
+$dbi->register_filter(ppp => sub { uc $_[0] });
+$dbi->type_rule(
+    into => {
+        Date => 'ppp'
+    }
+);
+$dbi->insert({key1 => 'a'}, table => 'table1');
+$result = $dbi->select(table => 'table1');
+is($result->one->{key1}, 'A');
+
+eval{$dbi->type_rule(
+    into => {
+        Date => 'pp'
+    }
+)};
+like($@, qr/not registered/);
+
+test 'result_filter';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->execute($CREATE_TABLE->{2});
+
+$dbi->create_model(
+    table => 'table1',
+    join => [
+       'left outer join table2 on table1.key1 = table2.key1'
+    ],
+    primary_key => ['key1'],
+    result_filter => {
+        key1 => sub { $_[0] * 2 }
+    }
+);
+$model2 = $dbi->create_model(
+    table => 'table2',
+    result_filter => [
+        [qw/key1 key3/] => sub { $_[0] * 3 }
+    ]
+);
+$dbi->setup_model;
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 3});
+$model = $dbi->model('table1');
+$result = $model->select(
+    column => [
+        $model->mycolumn,
+        {table2 => [qw/key1 key3/]}
+    ],
+    where => {'table1.key1' => 1}
+);
+is_deeply($result->one,
+          {key1 => 2, key2 => 2, 'table2.key1' => 3, 'table2.key3' => 9});
+is_deeply($model2->select->one, {key1 => 3, key3 => 9});
+
+test 'filter_off';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{0});
+$dbi->execute($CREATE_TABLE->{2});
+
+$dbi->create_model(
+    table => 'table1',
+    join => [
+       'left outer join table2 on table1.key1 = table2.key1'
+    ],
+    primary_key => ['key1'],
+    result_filter => {
+        key1 => sub { $_[0] * 2 }
+    },
+);
+$model2 = $dbi->create_model(
+    table => 'table2',
+    result_filter => [
+        [qw/key1 key3/] => sub { $_[0] * 3 }
+    ]
+);
+$dbi->setup_model;
+$dbi->insert(table => 'table1', param => {key1 => 1, key2 => 2});
+$dbi->insert(table => 'table2', param => {key1 => 1, key3 => 3});
+$model = $dbi->model('table1');
+$result = $model->select(
+    column => [
+        $model->mycolumn,
+        {table2 => [qw/key1 key3/]}
+    ],
+    where => {'table1.key1' => 1}
+);
+$result->filter_off(1);
+$result->end_filter(key1 => sub { $_[0] * 5});
+is_deeply($result->one,
+          {key1 => 1, key2 => 2, 'table2.key1' => 1, 'table2.key3' => 3});
+
+$result = $model->select(
+    column => [
+        $model->mycolumn,
+        {table2 => [qw/key1 key3/]}
+    ],
+    where => {'table1.key1' => 1}
+);
+$result->filter_off(1);
+$result->end_filter(key1 => sub { $_[0] * 5});
+
+is_deeply($result->fetch_first,
+          [1, 2, 1, 3]);
 
 =cut

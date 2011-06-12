@@ -9,7 +9,7 @@ use Carp 'croak';
 use DBIx::Custom::Util qw/_array_to_hash _subname/;
 
 __PACKAGE__->attr(
-    [qw/filters sth type_rule type_rule_off/],
+    [qw/filters filter_off sth type_rule type_rule_off/],
     stash => sub { {} }
 );
 
@@ -111,8 +111,8 @@ sub fetch {
     
     for (my $i = 0; $i < @$columns; $i++) {
         
-        if (!$self->type_rule_off && $type_rule->{$types->[$i]} &&
-            (my $rule = $type_rule->{$types->[$i]}->{from}))
+        if (!$self->type_rule_off && $type_rule->{from} &&
+            (my $rule = $type_rule->{from}->{$types->[$i]}))
         {
             $row[$i] = $rule->($row[$i]);
         }
@@ -125,8 +125,8 @@ sub fetch {
         my $ef = $end_filter->{$column};
         
         # Filtering
-        $row[$i] = $f->($row[$i]) if $f;
-        $row[$i] = $ef->($row[$i]) if $ef;
+        $row[$i] = $f->($row[$i]) if $f && !$self->filter_off;
+        $row[$i] = $ef->($row[$i]) if $ef && !$self->filter_off;
     }
 
     return \@row;
@@ -181,8 +181,8 @@ sub fetch_hash {
     for (my $i = 0; $i < @$columns; $i++) {
         
         # Type rule
-        if (!$self->type_rule_off && $type_rule->{$types->[$i]} &&
-            (my $rule = $type_rule->{$types->[$i]}->{from}))
+        if (!$self->type_rule_off && $type_rule->{from} &&
+            (my $rule = $type_rule->{from}->{$types->[$i]}))
         {
             $row->[$i] = $rule->($row->[$i]);
         }
@@ -195,8 +195,10 @@ sub fetch_hash {
         my $ef = $end_filter->{$column};
         
         # Filtering
-        $row_hash->{$column} = $f ? $f->($row->[$i]) : $row->[$i];
-        $row_hash->{$column} = $ef->($row_hash->{$column}) if $ef;
+        $row_hash->{$column} = $f && !$self->filter_off ? $f->($row->[$i])
+                                                        : $row->[$i];
+        $row_hash->{$column} = $ef->($row_hash->{$column})
+          if $ef && !$self->filter_off;
     }
     
     return $row_hash;
@@ -374,6 +376,13 @@ Fetch row into hash.
 
 Filters when a row is fetched.
 This overwrites C<default_filter>.
+
+=head2 C<filter_off> EXPERIMENTAL
+
+    my $filter_off = $resutl->filter_off;
+    $result = $result->filter_off(1);
+
+Turn filter off.
 
 =head2 C<filters>
 
