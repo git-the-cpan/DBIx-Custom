@@ -47,43 +47,6 @@ sub filter {
     return $self->{filter} ||= {};
 }
 
-sub end_filter {
-    my $self = shift;
-    
-    if (@_) {
-        my $end_filter = {};
-        
-        if (ref $_[0] eq 'HASH') {
-            $end_filter = $_[0];
-        }
-        else {
-            $end_filter = _array_to_hash(
-                @_ > 1 ? [@_] : $_[0]
-            );
-        }
-        
-        foreach my $column (keys %$end_filter) {
-            my $fname = $end_filter->{$column};
-            
-            if  (exists $end_filter->{$column}
-              && defined $fname
-              && ref $fname ne 'CODE') 
-            {
-              croak qq{Filter "$fname" is not registered" } . _subname
-                unless exists $self->filters->{$fname};
-              
-              $end_filter->{$column} = $self->filters->{$fname};
-            }
-        }
-        
-        $self->{end_filter} = {%{$self->end_filter}, %$end_filter};
-        
-        return $self;
-    }
-    
-    return $self->{end_filter} ||= {};
-}
-
 sub fetch {
     my $self = shift;
     
@@ -91,7 +54,7 @@ sub fetch {
     my $filter = $self->filter;
     
     # End filter
-    my $end_filter = $self->end_filter;
+    my $end_filter = $self->{end_filter} || {};
     
     # Fetch
     my @row = $self->{sth}->fetchrow_array;
@@ -116,7 +79,7 @@ sub fetch {
         my $column = $columns->[$i];
         my $f  = exists $filter->{$column}
                ? $filter->{$column}
-               : $self->default_filter;
+               : $self->{default_filter};
         my $ef = $end_filter->{$column};
         
         # Filtering
@@ -160,7 +123,7 @@ sub fetch_hash {
     my $filter  = $self->filter;
     
     # End filter
-    my $end_filter = $self->end_filter;
+    my $end_filter = $self->{end_filter} || {};
     
     # Fetch
     my $row = $self->{sth}->fetchrow_arrayref;
@@ -186,7 +149,7 @@ sub fetch_hash {
         my $column = $columns->[$i];
         my $f  = exists $filter->{$column}
                ? $filter->{$column}
-               : $self->default_filter;
+               : $self->{default_filter};
         my $ef = $end_filter->{$column};
         
         # Filtering
@@ -266,25 +229,71 @@ sub fetch_multi {
 
 *one = \&fetch_hash_first;
 
+# DEPRECATED!
+sub end_filter {
+    my $self = shift;
+    
+    if (@_) {
+        my $end_filter = {};
+        
+        if (ref $_[0] eq 'HASH') {
+            $end_filter = $_[0];
+        }
+        else {
+            $end_filter = _array_to_hash(
+                @_ > 1 ? [@_] : $_[0]
+            );
+        }
+        
+        foreach my $column (keys %$end_filter) {
+            my $fname = $end_filter->{$column};
+            
+            if  (exists $end_filter->{$column}
+              && defined $fname
+              && ref $fname ne 'CODE') 
+            {
+              croak qq{Filter "$fname" is not registered" } . _subname
+                unless exists $self->filters->{$fname};
+              
+              $end_filter->{$column} = $self->filters->{$fname};
+            }
+        }
+        
+        $self->{end_filter} = {%{$self->end_filter}, %$end_filter};
+        
+        return $self;
+    }
+    
+    return $self->{end_filter} ||= {};
+}
+
+# DEPRECATED!
 sub remove_end_filter {
     my $self = shift;
+    
+    warn "remove_end_filter is DEPRECATED! use filter_off attribute instead";
     
     $self->{end_filter} = {};
     
     return $self;
 }
 
+# DEPRECATED!
 sub remove_filter {
     my $self = shift;
+
+    warn "remove_filter is DEPRECATED! use filter_off attribute instead";
     
     $self->{filter} = {};
     
     return $self;
 }
 
-# Deprecated
+# DEPRECATED!
 sub default_filter {
     my $self = shift;
+
+    warn "default_filter is DEPRECATED!";
     
     if (@_) {
         my $fname = $_[0];
@@ -305,7 +314,7 @@ sub default_filter {
 }
 
 # DEPRECATED!
-__PACKAGE__->attr('filter_check'); 
+has 'filter_check'; 
 
 1;
 
@@ -411,17 +420,6 @@ and implements the following new ones.
 
 This is alias for C<fetch_hash_all>.
 
-=head2 C<end_filter>
-
-    $result = $result->end_filter(title  => 'to_something',
-                                     author => 'to_something');
-
-    $result = $result->end_filter([qw/title author/] => 'to_something');
-
-End filters.
-These each filters is executed after the filters applied by C<apply_filter> of
-L<DBIx::Custom> or C<filter> method.
-
 =head2 C<fetch>
 
     my $row = $result->fetch;
@@ -489,12 +487,6 @@ L<DBIx::Custom>.
 
 This is alias for C<fetch_hash_first>.
 
-=head2 C<remove_end_filter>
-
-    $result->remove_end_filter;
-
-Remove end filter.
-
 =head2 C<remove_filter>
 
     $result->remove_filter;
@@ -508,5 +500,22 @@ Remove filter. End filter is not removed.
     $result->stash->{foo} = $foo;
 
 Stash is hash reference to save your data.
+
+=head2 C<remove_end_filter> DEPRECATED!
+
+    $result->remove_end_filter;
+
+Remove end filter.
+
+=head2 C<end_filter> DEPRECATED!
+
+    $result = $result->end_filter(title  => 'to_something',
+                                     author => 'to_something');
+
+    $result = $result->end_filter([qw/title author/] => 'to_something');
+
+End filters.
+These each filters is executed after the filters applied by C<apply_filter> of
+L<DBIx::Custom> or C<filter> method.
 
 =cut

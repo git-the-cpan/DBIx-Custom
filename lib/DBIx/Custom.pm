@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1690';
+our $VERSION = '0.1691';
 use 5.008001;
 
 use Object::Simple -base;
@@ -79,76 +79,6 @@ sub AUTOLOAD {
     }
 }
 
-sub apply_filter { shift->_apply_filter(@_) }
-
-sub _apply_filter {
-    my ($self, $table, @cinfos) = @_;
-
-    # Initialize filters
-    $self->{filter} ||= {};
-    $self->{filter}{out} ||= {};
-    $self->{filter}{in} ||= {};
-    $self->{filter}{end} ||= {};
-    
-    # Usage
-    my $usage = "Usage: \$dbi->apply_filter(" .
-                "TABLE, COLUMN1, {in => INFILTER1, out => OUTFILTER1, end => ENDFILTER1}, " .
-                "COLUMN2, {in => INFILTER2, out => OUTFILTER2, end => ENDFILTER2}, ...)";
-    
-    # Apply filter
-    for (my $i = 0; $i < @cinfos; $i += 2) {
-        
-        # Column
-        my $column = $cinfos[$i];
-        if (ref $column eq 'ARRAY') {
-            foreach my $c (@$column) {
-                push @cinfos, $c, $cinfos[$i + 1];
-            }
-            next;
-        }
-        
-        # Filter infomation
-        my $finfo = $cinfos[$i + 1] || {};
-        croak "$usage (table: $table) " . _subname
-          unless  ref $finfo eq 'HASH';
-        foreach my $ftype (keys %$finfo) {
-            croak "$usage (table: $table) " . _subname
-              unless $ftype eq 'in' || $ftype eq 'out' || $ftype eq 'end'; 
-        }
-        
-        # Set filters
-        foreach my $way (qw/in out end/) {
-        
-            # Filter
-            my $filter = $finfo->{$way};
-            
-            # Filter state
-            my $state = !exists $finfo->{$way} ? 'not_exists'
-                      : !defined $filter        ? 'not_defined'
-                      : ref $filter eq 'CODE'   ? 'code'
-                      : 'name';
-            
-            # Filter is not exists
-            next if $state eq 'not_exists';
-            
-            # Check filter name
-            croak qq{Filter "$filter" is not registered } . _subname
-              if  $state eq 'name'
-               && ! exists $self->filters->{$filter};
-            
-            # Set filter
-            my $f = $state eq 'not_defined' ? undef
-                  : $state eq 'code'        ? $filter
-                  : $self->filters->{$filter};
-            $self->{filter}{$way}{$table}{$column} = $f;
-            $self->{filter}{$way}{$table}{"$table.$column"} = $f;
-            $self->{filter}{$way}{$table}{"${table}__$column"} = $f;
-        }
-    }
-    
-    return $self;
-}
-
 sub assign_param {
     my ($self, $param) = @_;
     
@@ -168,30 +98,20 @@ sub assign_param {
     return $tag;
 }
 
-sub col {
-    my ($self, $table, $columns) = @_;
-    
-    # Reserved word quote
-    my $q = $self->reserved_word_quote;
-    
-    # Column clause
-    my @column;
-    $columns ||= [];
-    push @column, "$q$table$q.$q$_$q as $q${table}.$_$q" for @$columns;
-    
-    return join (', ', @column);
-}
-
 sub column {
     my ($self, $table, $columns) = @_;
     
     # Reserved word quote
     my $q = $self->reserved_word_quote;
     
+    # Separator
+    my $separator = $self->separator;
+    
     # Column clause
     my @column;
     $columns ||= [];
-    push @column, "$q$table$q.$q$_$q as $q${table}__$_$q" for @$columns;
+    push @column, "$q$table$q.$q$_$q as $q${table}${separator}$_$q"
+      for @$columns;
     
     return join (', ', @column);
 }
@@ -385,14 +305,14 @@ sub create_model {
     my $filter = ref $model->filter eq 'HASH'
                ? [%{$model->filter}]
                : $model->filter;
-    $self->apply_filter($model->table, @$filter);
+    $self->_apply_filter($model->table, @$filter);
     my $result_filter = ref $model->result_filter eq 'HASH'
                ? [%{$model->result_filter}]
                : $model->result_filter;
     for (my $i = 1; $i < @$result_filter; $i += 2) {
         $result_filter->[$i] = {in => $result_filter->[$i]};
     }
-    $self->apply_filter($model->table, @$result_filter);
+    $self->_apply_filter($model->table, @$result_filter);
     
     # Associate table with model
     croak "Table name is duplicated " . _subname
@@ -488,6 +408,7 @@ sub execute {
                 my $filter_name_alias = $filter_name;
                 $filter_name_alias =~ s/^$alias\./$table\./;
                 $filter_name_alias =~ s/^${alias}__/${table}__/; 
+                $filter_name_alias =~ s/^${alias}-/${table}-/; 
                 $self->{filter}{$type}{$table}{$filter_name_alias}
                   = $self->{filter}{$type}{$alias}{$filter_name}
             }
@@ -854,7 +775,8 @@ sub register_filter {
 
 our %SELECT_ARGS
   = map { $_ => 1 } @COMMON_ARGS,
-                    qw/column where relation join param where_param wrap/;
+                    qw/column where relation join param where_param wrap
+                       prefix/;
 
 sub select {
     my ($self, %args) = @_;
@@ -884,6 +806,7 @@ sub select {
           "must be specified when id is specified " . _subname
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    my $prefix = delete $args{prefix};
     
     # Check arguments
     foreach my $name (keys %args) {
@@ -901,12 +824,15 @@ sub select {
     # Reserved word quote
     my $q = $self->reserved_word_quote;
     
+    # Prefix
+    push @sql, $prefix if defined $prefix;
+    
     # Column clause
     if ($columns) {
         $columns = [$columns] unless ref $columns eq 'ARRAY';
         foreach my $column (@$columns) {
             if (ref $column eq 'HASH') {
-                $column = $self->col(%$column) if ref $column eq 'HASH';
+                $column = $self->column(%$column) if ref $column eq 'HASH';
             }
             elsif (ref $column eq 'ARRAY') {
                 croak "Format must be [COLUMN, as => ALIAS] " . _subname
@@ -992,6 +918,22 @@ sub select {
     return $result;
 }
 
+sub separator {
+    my $self = shift;
+    
+    if (@_) {
+        my $separator = $_[0] || '';
+        croak qq{Separator must be "." or "__" or "-" } . _subname
+          unless $separator eq '.' || $separator eq '__'
+              || $separator eq '-';
+        
+        $self->{separator} = $separator;
+    
+        return $self;
+    }
+    return $self->{separator} ||= '.';
+}
+
 sub setup_model {
     my $self = shift;
     
@@ -1028,18 +970,19 @@ sub type_rule {
     
     if (@_) {
         my $type_rule = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-        $type_rule->{from} = _array_to_hash($type_rule->{from});
+        
+        # Into
         $type_rule->{into} = _array_to_hash($type_rule->{into});
         $self->{type_rule} = $type_rule;
         $self->{_into} ||= {};
         $self->each_column(sub {
             my ($dbi, $table, $column, $column_info) = @_;
             
-            my $type = $column_info->{TYPE_NAME};
+            my $type_name = $column_info->{TYPE_NAME};
             if ($type_rule->{into} &&
-                (my $filter = $type_rule->{into}->{$type}))
+                (my $filter = $type_rule->{into}->{$type_name}))
             {
-                return unless exists $type_rule->{into}->{$type};
+                return unless exists $type_rule->{into}->{$type_name};
                 if  (defined $filter && ref $filter ne 'CODE') 
                 {
                     my $fname = $filter;
@@ -1052,6 +995,19 @@ sub type_rule {
                 $self->{_into}{$table}{$column} = $filter;
             }
         });
+        
+
+        # From
+        $type_rule->{from} = _array_to_hash($type_rule->{from});
+        foreach my $data_type (keys %{$type_rule->{from} || {}}) {
+            my $fname = $type_rule->{from}{$data_type};
+            if (defined $fname && ref $fname ne 'CODE') {
+                croak qq{Filter "$fname" is not registered" } . _subname
+                  unless exists $self->filters->{$fname};
+                
+                $type_rule->{from}{$data_type} = $self->filters->{$fname};
+            }
+        }
         
         return $self;
     }
@@ -1157,6 +1113,75 @@ sub where {
     );
 }
 
+sub _apply_filter {
+    my ($self, $table, @cinfos) = @_;
+
+    # Initialize filters
+    $self->{filter} ||= {};
+    $self->{filter}{out} ||= {};
+    $self->{filter}{in} ||= {};
+    $self->{filter}{end} ||= {};
+    
+    # Usage
+    my $usage = "Usage: \$dbi->apply_filter(" .
+                "TABLE, COLUMN1, {in => INFILTER1, out => OUTFILTER1, end => ENDFILTER1}, " .
+                "COLUMN2, {in => INFILTER2, out => OUTFILTER2, end => ENDFILTER2}, ...)";
+    
+    # Apply filter
+    for (my $i = 0; $i < @cinfos; $i += 2) {
+        
+        # Column
+        my $column = $cinfos[$i];
+        if (ref $column eq 'ARRAY') {
+            foreach my $c (@$column) {
+                push @cinfos, $c, $cinfos[$i + 1];
+            }
+            next;
+        }
+        
+        # Filter infomation
+        my $finfo = $cinfos[$i + 1] || {};
+        croak "$usage (table: $table) " . _subname
+          unless  ref $finfo eq 'HASH';
+        foreach my $ftype (keys %$finfo) {
+            croak "$usage (table: $table) " . _subname
+              unless $ftype eq 'in' || $ftype eq 'out' || $ftype eq 'end'; 
+        }
+        
+        # Set filters
+        foreach my $way (qw/in out end/) {
+        
+            # Filter
+            my $filter = $finfo->{$way};
+            
+            # Filter state
+            my $state = !exists $finfo->{$way} ? 'not_exists'
+                      : !defined $filter        ? 'not_defined'
+                      : ref $filter eq 'CODE'   ? 'code'
+                      : 'name';
+            
+            # Filter is not exists
+            next if $state eq 'not_exists';
+            
+            # Check filter name
+            croak qq{Filter "$filter" is not registered } . _subname
+              if  $state eq 'name'
+               && ! exists $self->filters->{$filter};
+            
+            # Set filter
+            my $f = $state eq 'not_defined' ? undef
+                  : $state eq 'code'        ? $filter
+                  : $self->filters->{$filter};
+            $self->{filter}{$way}{$table}{$column} = $f;
+            $self->{filter}{$way}{$table}{"$table.$column"} = $f;
+            $self->{filter}{$way}{$table}{"${table}__$column"} = $f;
+            $self->{filter}{$way}{$table}{"${table}-$column"} = $f;
+        }
+    }
+    
+    return $self;
+}
+
 sub _create_bind_values {
     my ($self, $params, $columns, $filter, $type) = @_;
     
@@ -1228,7 +1253,8 @@ sub _connect {
     
     # Attributes
     my $dsn = $self->data_source;
-    warn "data_source is DEPRECATED! use dsn instead\n";
+    warn "data_source is DEPRECATED! use dsn instead\n"
+      if $dsn;
     $dsn ||= $self->dsn;
     croak qq{"dsn" must be specified } . _subname
       unless $dsn;
@@ -1313,7 +1339,8 @@ sub _push_join {
               = {position => $i, parent => $table1, join => $join_clause};
         }
         else {
-            croak qq{join "$join_clause" must be two table name } . _subname
+            croak qq{join clause must have two table name after "on" keyword. } .
+                  qq{"$join_clause" is passed }  . _subname
         }
     }
     
@@ -1395,6 +1422,17 @@ sub _where_to_obj {
       unless ref $obj eq 'DBIx::Custom::Where';
     
     return $obj;
+}
+
+# DEPRECATED!
+sub apply_filter {
+    my $self = shift;
+    
+    warn "apply_filter is DEPRECATED! " . 
+         "use type_rule method, DBIx::Custom::Result filter method, " .
+         "and DBIx::Custom::Model result_filter method instead";
+    
+    return $self->_apply_filter(@_);
 }
 
 # DEPRECATED!
@@ -1517,19 +1555,18 @@ sub register_tag {
 }
 
 # DEPRECATED!
-__PACKAGE__->attr('data_source');
+has 'data_source';
 
 # DEPRECATED!
-__PACKAGE__->attr(
-    dbi_options => sub { {} },
-    filter_check  => 1
-);
+has dbi_options => sub { {} },
+    filter_check  => 1;
+
 
 # DEPRECATED!
 sub default_bind_filter {
     my $self = shift;
     
-    warn "default_bind_filter is DEPRECATED! use apply_filter instead\n";
+    warn "default_bind_filter is DEPRECATED!";
     
     if (@_) {
         my $fname = $_[0];
@@ -1553,7 +1590,7 @@ sub default_bind_filter {
 sub default_fetch_filter {
     my $self = shift;
 
-    warn "default_fetch_filter is DEPRECATED! use apply_filter instead\n";
+    warn "default_fetch_filter is DEPRECATED!";
     
     if (@_) {
         my $fname = $_[0];
@@ -1669,6 +1706,7 @@ DBIx::Custom - Useful database access, respecting SQL!
     # Select
     my $result = $dbi->select(
         table  => 'book',
+        column => ['title', 'author'],
         where  => {author => 'Ken'},
     );
 
@@ -1676,8 +1714,8 @@ DBIx::Custom - Useful database access, respecting SQL!
     my $result = $dbi->select(
         table  => 'book',
         column => [
-            'book.author as book__author',
-            'company.name as company__name'
+            {book => [qw/title author/]},
+            {company => ['name']}
         ],
         where  => {'book.author' => 'Ken'},
         join => ['left outer join company on book.company_id = company.id'],
@@ -1870,48 +1908,6 @@ and implements the following new ones.
 
 Get available data type.
 
-=head2 C<apply_filter>
-
-    $dbi->apply_filter(
-        'book',
-        'issue_date' => {
-            out => 'tp_to_date',
-            in  => 'date_to_tp',
-            end => 'tp_to_displaydate'
-        },
-        'write_date' => {
-            out => 'tp_to_date',
-            in  => 'date_to_tp',
-            end => 'tp_to_displaydate'
-        }
-    );
-
-Apply filter to columns.
-C<out> filter is executed before data is send to database.
-C<in> filter is executed after a row is fetch.
-C<end> filter is execute after C<in> filter is executed.
-
-Filter is applied to the follwoing tree column name pattern.
-
-       PETTERN         EXAMPLE
-    1. Column        : author
-    2. Table.Column  : book.author
-    3. Table__Column : book__author
-
-If column name is duplicate with other table,
-Main filter specified by C<table> option is used.
-
-You can set multiple filters at once.
-
-    $dbi->apply_filter(
-        'book',
-        [qw/issue_date write_date/] => {
-            out => 'tp_to_date',
-            in  => 'date_to_tp',
-            end => 'tp_to_displaydate'
-        }
-    );
-
 =head2 C<assign_param> EXPERIMENTAL
 
     my $assign_param = $dbi->assign_param({title => 'a', age => 2});
@@ -1922,24 +1918,29 @@ Create assign parameter.
 
 This is equal to C<update_param> exept that set is not added.
 
-=head2 C<col> EXPERIMETNAL
-
-    my $column = $model->col(book => ['author', 'title']);
-
-Create column clause. The follwoing column clause is created.
-
-    book.author as "book.author",
-    book.title as "book.title"
-
 =head2 C<column> EXPERIMETNAL
 
     my $column = $dbi->column(book => ['author', 'title']);
 
 Create column clause. The follwoing column clause is created.
 
-    book.author as book__author,
-    book.title as book__title
+    book.author as "book.author",
+    book.title as "book.title"
 
+You can change separator by C<separator> method.
+
+    # Separator is double underbar
+    $dbi->separator('__');
+    
+    book.author as "book__author",
+    book.title as "book__title"
+
+    # Separator is hyphen
+    $dbi->separator('-');
+    
+    book.author as "book-author",
+    book.title as "book-title"
+    
 =head2 C<connect>
 
     my $dbi = DBIx::Custom->connect(
@@ -2406,13 +2407,56 @@ Register filters, used by C<filter> option of many methods.
 
 Filtering rule when data is send into and get from database.
 This has a little complex problem. 
+
 In C<into> you can specify type name as same as type name defined
 by create table, such as C<DATETIME> or C<DATE>.
-but in C<from> you can't specify type name defined by create table.
+Type rule of C<into> is enabled on the following pattern.
+
+=over 4
+
+=item 1. column name
+
+    issue_date
+    issue_datetime
+
+=item 2. table name and column name, separator is dot
+
+    book.issue_date
+    book.issue_datetime
+
+=back
+
+In C<from> you can't specify type name defined by create table.
 You must specify data type, this is internal one.
 You get all data type by C<available_data_type>.
 
     print $dbi->available_data_type;
+
+Type rule of C<from> is enabled on the following pattern.
+
+=item 1. column name
+
+    issue_date
+    issue_datetime
+
+=item 2. table name and column name, separator is dot
+
+    book.issue_date
+    book.issue_datetime
+
+=item 3. table name and column name, separator is double underbar
+
+    book__issue_date
+    book__issue_datetime
+
+=item 4. table name and column name, separator is hyphen
+
+    book-issue_date
+    book-issue_datetime
+
+This is useful in HTML.
+
+=back
 
 You can also specify multiple types
 
@@ -2518,6 +2562,14 @@ you can pass parameter by C<param> option.
     join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
               ' as table2 on table1.key1 = table2.key1']
 
+=itme C<prefix> EXPERIMENTAL
+
+    prefix => 'SQL_CALC_FOUND_ROWS'
+
+Prefix of column cluase
+
+    select SQL_CALC_FOUND_ROWS title, author from book;
+
 =item C<join>
 
     join => [
@@ -2530,7 +2582,7 @@ join clausees needed when SQL is created is used automatically.
 
     $dbi->select(
         table => 'book',
-        column => ['company.location_id as company__location_id'],
+        column => ['company.location_id as location_id'],
         where => {'company.name' => 'Orange'},
         join => [
             'left outer join company on book.company_id = company.id',
@@ -2541,10 +2593,10 @@ join clausees needed when SQL is created is used automatically.
 In above select, column and where clause contain "company" table,
 the following SQL is created
 
-    select company.location_id as company__location_id
+    select company.location_id as location_id
     from book
       left outer join company on book.company_id = company.id
-    where company.name = Orange
+    where company.name = ?;
 
 =item C<primary_key>
 
@@ -2791,6 +2843,49 @@ In this example, result statement is
 Column names is
 
     ['title', 'author']
+
+=head2 C<apply_filter> DEPRECATED!
+
+    $dbi->apply_filter(
+        'book',
+        'issue_date' => {
+            out => 'tp_to_date',
+            in  => 'date_to_tp',
+            end => 'tp_to_displaydate'
+        },
+        'write_date' => {
+            out => 'tp_to_date',
+            in  => 'date_to_tp',
+            end => 'tp_to_displaydate'
+        }
+    );
+
+Apply filter to columns.
+C<out> filter is executed before data is send to database.
+C<in> filter is executed after a row is fetch.
+C<end> filter is execute after C<in> filter is executed.
+
+Filter is applied to the follwoing tree column name pattern.
+
+       PETTERN         EXAMPLE
+    1. Column        : author
+    2. Table.Column  : book.author
+    3. Table__Column : book__author
+    4. Table-Column  : book-author
+
+If column name is duplicate with other table,
+Main filter specified by C<table> option is used.
+
+You can set multiple filters at once.
+
+    $dbi->apply_filter(
+        'book',
+        [qw/issue_date write_date/] => {
+            out => 'tp_to_date',
+            in  => 'date_to_tp',
+            end => 'tp_to_displaydate'
+        }
+    );
 
 =head1 Parameter
 

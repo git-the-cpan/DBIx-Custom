@@ -1,3 +1,13 @@
+0.1691
+    - DBIx::Custom::Result end_filter, remove_filter, remove_end_filter is DEPRECATED!
+    - apply_filter is DEPRECATED!
+    - EXPERIMETAL column method and table_alias think about "-" separator
+    - EXPERIMTANL column method think about separator
+    - removed EXPERIMENTAL col method.
+    - added EXPERIMENTAL separater method
+    - added EXPERIMENTAL select prefix option.
+    - fixed bug that data_source DEPRECATED warnings pirnt STDERR
+    - fixed bug that type_rule from option can't receive filter name
 0.1690
     - use latest Object::Simple features
 0.1689

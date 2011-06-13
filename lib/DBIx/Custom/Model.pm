@@ -82,23 +82,6 @@ sub column {
     return $self->dbi->column($table, $columns);
 }
 
-sub col {
-    my ($self, $table, $columns) = @_;
-    
-    $self->{_table_alias} ||= {};
-    my $dist;
-    $dist = $self->dbi->{_table_alias}{$table}
-          ? $self->dbi->{_table_alias}{$table}
-          : $table;
-    
-    $self->dbi->{_model_from} ||= {};
-    my $model = $self->dbi->{_model_from}->{$dist};
-    
-    $columns ||= $self->model($model)->columns;
-    
-    return $self->dbi->col($table, $columns);
-}
-
 sub DESTROY { }
 
 sub method {
@@ -247,22 +230,10 @@ and implements the following new ones.
 
 Create column clause. The follwoing column clause is created.
 
-    book.author as book__author,
-    book.title as book__title
-
-If column names is omitted, C<columns> attribute of the model is used.
-
-=head2 C<col> EXPERIMETNAL
-
-    my $column = $model->col(book => ['author', 'title']);
-    my $column = $model->col('book');
-
-Create column clause. The follwoing column clause is created.
-
     book.author as "book.author",
     book.title as "book.title"
 
-If column names is omitted, C<columns> attribute of the model is used.
+If Second argument is ommited, all columns set by C<columns> is used.
 
 =head2 C<delete>
 
