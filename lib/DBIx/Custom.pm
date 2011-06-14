@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1691';
+our $VERSION = '0.1692';
 use 5.008001;
 
 use Object::Simple -base;
@@ -306,13 +306,6 @@ sub create_model {
                ? [%{$model->filter}]
                : $model->filter;
     $self->_apply_filter($model->table, @$filter);
-    my $result_filter = ref $model->result_filter eq 'HASH'
-               ? [%{$model->result_filter}]
-               : $model->result_filter;
-    for (my $i = 1; $i < @$result_filter; $i += 2) {
-        $result_filter->[$i] = {in => $result_filter->[$i]};
-    }
-    $self->_apply_filter($model->table, @$result_filter);
     
     # Associate table with model
     croak "Table name is duplicated " . _subname
@@ -521,8 +514,7 @@ sub execute {
             default_filter => $self->{default_in_filter},
             filter => $filter->{in} || {},
             end_filter => $filter->{end} || {},
-            type_rule => $self->type_rule,
-            type_rule_off => $type_rule_off
+            type_rule => \%{$self->type_rule->{from}},
         );
 
         return $result;
@@ -965,6 +957,21 @@ sub available_data_type {
     return $data_types;
 }
 
+sub available_type_name {
+    my $self = shift;
+    
+    # Type Names
+    my $type_names = {};
+    $self->each_column(sub {
+        my ($self, $table, $column, $column_info) = @_;
+        $type_names->{$column_info->{TYPE_NAME}} = 1
+          if $column_info->{TYPE_NAME};
+    });
+    my @output = sort keys %$type_names;
+    unshift @output, "Type Name";
+    return join "\n", @output;
+}
+
 sub type_rule {
     my $self = shift;
     
@@ -975,10 +982,14 @@ sub type_rule {
         $type_rule->{into} = _array_to_hash($type_rule->{into});
         $self->{type_rule} = $type_rule;
         $self->{_into} ||= {};
+        foreach my $type_name (keys %{$type_rule->{into} || {}}) {
+            croak qq{type name of into section must be lower case}
+              if $type_name =~ /[A-Z]/;
+        }
         $self->each_column(sub {
             my ($dbi, $table, $column, $column_info) = @_;
             
-            my $type_name = $column_info->{TYPE_NAME};
+            my $type_name = lc $column_info->{TYPE_NAME};
             if ($type_rule->{into} &&
                 (my $filter = $type_rule->{into}->{$type_name}))
             {
@@ -1000,6 +1011,8 @@ sub type_rule {
         # From
         $type_rule->{from} = _array_to_hash($type_rule->{from});
         foreach my $data_type (keys %{$type_rule->{from} || {}}) {
+            croak qq{data type of into section must be lower case or number}
+              if $data_type =~ /[A-Z]/;
             my $fname = $type_rule->{from}{$data_type};
             if (defined $fname && ref $fname ne 'CODE') {
                 croak qq{Filter "$fname" is not registered" } . _subname
@@ -1429,8 +1442,8 @@ sub apply_filter {
     my $self = shift;
     
     warn "apply_filter is DEPRECATED! " . 
-         "use type_rule method, DBIx::Custom::Result filter method, " .
-         "and DBIx::Custom::Model result_filter method instead";
+         "use type_rule method and DBIx::Custom::Result filter method, " .
+         "instead";
     
     return $self->_apply_filter(@_);
 }
@@ -1906,7 +1919,15 @@ and implements the following new ones.
 
     print $dbi->available_data_type;
 
-Get available data type.
+Get available data types. You can use these data types
+in C<type rule>'s C<from> section.
+
+=head2 C<available_type_name> EXPERIMENTAL
+
+    print $dbi->available_type_name;
+
+Get available type names. You can use these type names in
+C<type_rule>'s C<into> section.
 
 =head2 C<assign_param> EXPERIMENTAL
 

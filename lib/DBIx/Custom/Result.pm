@@ -5,7 +5,7 @@ use Object::Simple -base;
 use Carp 'croak';
 use DBIx::Custom::Util qw/_array_to_hash _subname/;
 
-has [qw/filters filter_off sth type_rule type_rule_off/],
+has [qw/filters filter_off sth type_rule_off/],
     stash => sub { {} };
 
 *all = \&fetch_hash_all;
@@ -69,12 +69,6 @@ sub fetch {
     
     for (my $i = 0; $i < @$columns; $i++) {
         
-        if (!$self->type_rule_off && $type_rule->{from} &&
-            (my $rule = $type_rule->{from}->{$types->[$i]}))
-        {
-            $row[$i] = $rule->($row[$i]);
-        }
-        
         # Filter name
         my $column = $columns->[$i];
         my $f  = exists $filter->{$column}
@@ -83,7 +77,14 @@ sub fetch {
         my $ef = $end_filter->{$column};
         
         # Filtering
-        $row[$i] = $f->($row[$i]) if $f && !$self->filter_off;
+        if ($f && !$self->filter_off) {
+            $row[$i] = $f->($row[$i]);
+        }
+        elsif (!$self->type_rule_off && (my $rule = $type_rule->{lc($types->[$i])}))
+        {
+            $row[$i] = $rule->($row[$i]);
+        }
+
         $row[$i] = $ef->($row[$i]) if $ef && !$self->filter_off;
     }
 
@@ -138,13 +139,6 @@ sub fetch_hash {
     my $type_rule = $self->type_rule || {};
     for (my $i = 0; $i < @$columns; $i++) {
         
-        # Type rule
-        if (!$self->type_rule_off && $type_rule->{from} &&
-            (my $rule = $type_rule->{from}->{$types->[$i]}))
-        {
-            $row->[$i] = $rule->($row->[$i]);
-        }
-        
         # Filter name
         my $column = $columns->[$i];
         my $f  = exists $filter->{$column}
@@ -153,8 +147,14 @@ sub fetch_hash {
         my $ef = $end_filter->{$column};
         
         # Filtering
-        $row_hash->{$column} = $f && !$self->filter_off ? $f->($row->[$i])
-                                                        : $row->[$i];
+        if ($f && !$self->filter_off) {
+            $row_hash->{$column} =  $f->($row->[$i]);
+        }
+        elsif (!$self->type_rule_off && (my $rule = $type_rule->{lc($types->[$i])}))
+        {
+            $row_hash->{$column} = $rule->($row->[$i]);
+        }
+        else { $row_hash->{$column} = $row->[$i] }
         $row_hash->{$column} = $ef->($row_hash->{$column})
           if $ef && !$self->filter_off;
     }
@@ -228,6 +228,36 @@ sub fetch_multi {
 }
 
 *one = \&fetch_hash_first;
+
+sub type_rule {
+    my $self = shift;
+    
+    # Merge type rule
+    if (@_) {
+        my $type_rule = @_ == 1 ? $_[0] : [@_];
+        $type_rule = _array_to_hash($type_rule) || {};
+        foreach my $data_type (keys %{$type_rule || {}}) {
+            croak qq{data type of into section must be lower case or number}
+              if $data_type =~ /[A-Z]/;
+            my $fname = $type_rule->{$data_type};
+            if (defined $fname && ref $fname ne 'CODE') {
+                croak qq{Filter "$fname" is not registered" } . _subname
+                  unless exists $self->filters->{$fname};
+                
+                $type_rule->{$data_type} = $self->filters->{$fname};
+            }
+        }
+        $self->{type_rule} = {%{$self->type_rule}, %$type_rule};
+    }
+    
+    return $self->{type_rule} ||= {};
+}
+
+sub clear_type_rule {
+    my $self = shift;
+    $self->{type_rule} = {};
+    return $self;
+}
 
 # DEPRECATED!
 sub end_filter {
@@ -500,6 +530,17 @@ Remove filter. End filter is not removed.
     $result->stash->{foo} = $foo;
 
 Stash is hash reference to save your data.
+
+=head2 C<type_rule> EXPERIMENTAL
+
+    $result->type_rule(
+        # DATE
+        9 => sub { ... },
+        # DATETIME or TIMESTAMP
+        11 => sub { ... }
+    );
+
+This override L<DBIx::Custom>'s C<type_rule> C<from> section.
 
 =head2 C<remove_end_filter> DEPRECATED!
 

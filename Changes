@@ -1,3 +1,10 @@
+0.1692
+    - removed EXPERIMENTAL DBIx::Model result_filter
+    - DBIx::Custom::Result filter override type_rule
+    - added EXPERIMENTAL DBIx::Custom::Result type_rule
+    - added EXPERIMENTAL available_type_name method 
+    - EXPERIMENTAL type_rule_off is not passed form execute method 
+      to DBIx::Custom::Result object
 0.1691
     - DBIx::Custom::Result end_filter, remove_filter, remove_end_filter is DEPRECATED!
     - apply_filter is DEPRECATED!
