@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1692';
+our $VERSION = '0.1693';
 use 5.008001;
 
 use Object::Simple -base;
@@ -99,7 +99,16 @@ sub assign_param {
 }
 
 sub column {
-    my ($self, $table, $columns) = @_;
+    my $self = shift;
+    my $option = pop if ref $_[-1] eq 'HASH';
+    my $real_table = shift;
+    my $columns = shift;
+    my $table = $option->{alias} || $real_table;
+    
+    # Columns
+    unless ($columns) {
+        $columns ||= $self->model($real_table)->columns;
+    }
     
     # Reserved word quote
     my $q = $self->reserved_word_quote;
@@ -305,17 +314,10 @@ sub create_model {
     my $filter = ref $model->filter eq 'HASH'
                ? [%{$model->filter}]
                : $model->filter;
+    warn "DBIx::Custom::Model filter method is DEPRECATED!"
+      if @$filter;
     $self->_apply_filter($model->table, @$filter);
-    
-    # Associate table with model
-    croak "Table name is duplicated " . _subname
-      if exists $self->{_model_from}->{$model->table};
-    $self->{_model_from}->{$model->table} = $model->name;
 
-    # Table alias
-    $self->{_table_alias} ||= {};
-    $self->{_table_alias} = {%{$self->{_table_alias}}, %{$model->table_alias}};
-    
     # Set model
     $self->model($model->name, $model);
     
@@ -381,35 +383,8 @@ sub execute {
         $_ =~ s/$q//g for @$tables;
     }
     
-    # Table alias
-    foreach my $table (@$tables) {
-        
-        # No need
-        next unless my $alias = $self->{_table_alias}->{$table};
-        $self->{filter} ||= {};
-        next if $self->{filter}{out}{$table};
-        
-        # Filter
-        $self->{filter}{out} ||= {};
-        $self->{filter}{in}  ||= {};
-        $self->{filter}{end} ||= {};
-        
-        # Create alias filter
-        foreach my $type (qw/out in end/) {
-            my @filter_names = keys %{$self->{filter}{$type}{$alias} || {}};
-            foreach my $filter_name (@filter_names) {
-                my $filter_name_alias = $filter_name;
-                $filter_name_alias =~ s/^$alias\./$table\./;
-                $filter_name_alias =~ s/^${alias}__/${table}__/; 
-                $filter_name_alias =~ s/^${alias}-/${table}-/; 
-                $self->{filter}{$type}{$table}{$filter_name_alias}
-                  = $self->{filter}{$type}{$alias}{$filter_name}
-            }
-        }
-    }
-
     # Type rule
-    my $applied_filter = {};
+    my $type_filter = {};
     unless ($type_rule_off) {
         foreach my $name (keys %$param) {
             my $table;
@@ -424,13 +399,14 @@ sub execute {
             if (defined $table && $into->{$table} &&
                 (my $rule = $into->{$table}->{$column}))
             {
-                $applied_filter->{$column} = $rule;
-                $applied_filter->{"$table.$column"} = $rule;
+                $type_filter->{$column} = $rule;
+                $type_filter->{"$table.$column"} = $rule;
             }
         }
     }
     
     # Applied filter
+    my $applied_filter = {};
     foreach my $table (@$tables) {
         $applied_filter = {
             %$applied_filter,
@@ -457,6 +433,7 @@ sub execute {
         $param,
         $query->columns,
         $filter,
+        $type_filter,
         $type
     );
     
@@ -981,7 +958,7 @@ sub type_rule {
         # Into
         $type_rule->{into} = _array_to_hash($type_rule->{into});
         $self->{type_rule} = $type_rule;
-        $self->{_into} ||= {};
+        $self->{_into} = {};
         foreach my $type_name (keys %{$type_rule->{into} || {}}) {
             croak qq{type name of into section must be lower case}
               if $type_name =~ /[A-Z]/;
@@ -1196,7 +1173,7 @@ sub _apply_filter {
 }
 
 sub _create_bind_values {
-    my ($self, $params, $columns, $filter, $type) = @_;
+    my ($self, $params, $columns, $filter, $type_filter, $type) = @_;
     
     # Create bind values
     my $bind = [];
@@ -1226,12 +1203,14 @@ sub _create_bind_values {
         
         # Filter
         my $f = $filter->{$column} || $self->{default_out_filter} || '';
+        $value = $f->($value) if $f;
         
-        # Type
-        push @$bind, {
-            value => $f ? $f->($value) : $value,
-            type => $type->{$column}
-        };
+        # Type rule
+        my $tf = $type_filter->{$column};
+        $value = $tf->($value) if $tf;
+        
+        # Bind values
+        push @$bind, {value => $value, type => $type->{$column}};
         
         # Count up 
         $count->{$column}++;
@@ -1825,8 +1804,6 @@ C<default_dbi_option> to L<DBIx::Connector>.
 
 Data source name, used when C<connect()> is executed.
 
-C<data_source> is DEPRECATED! It is renamed to C<dsn>.
-
 =head2 C<dbi_option>
 
     my $dbi_option = $dbi->dbi_option;
@@ -2076,11 +2053,10 @@ The following opitons are available.
         [qw/title author/]  => sub { uc $_[0] }
     ]
 
-Filter, executed before data is saved into database.
-Filter value is code reference or
-filter name registerd by C<register_filter()>.
-
-These filters are added to the C<out> filters, set by C<apply_filter()>.
+Filter. You can set subroutine or filter name
+registered by by C<register_filter()>.
+This filter is executed before data is saved into database.
+and before type rule filter is executed.
 
 =item C<query>
 
@@ -2414,8 +2390,8 @@ Register filters, used by C<filter> option of many methods.
 
     $dbi->type_rule(
         into => {
-            DATE => sub { ... },
-            DATETIME => sub { ... }
+            date => sub { ... },
+            datetime => sub { ... }
         },
         from => {
             # DATE
@@ -2427,11 +2403,14 @@ Register filters, used by C<filter> option of many methods.
     );
 
 Filtering rule when data is send into and get from database.
-This has a little complex problem. 
+This has a little complex problem.
 
 In C<into> you can specify type name as same as type name defined
 by create table, such as C<DATETIME> or C<DATE>.
 Type rule of C<into> is enabled on the following pattern.
+
+Note that type name and data type don't contain upper case.
+If that contain upper case charactor, you specify it lower case.
 
 =over 4
 
@@ -2447,6 +2426,10 @@ Type rule of C<into> is enabled on the following pattern.
 
 =back
 
+You get all type name used in database by C<available_type_name>.
+
+    print $dbi->available_type_name;
+
 In C<from> you can't specify type name defined by create table.
 You must specify data type, this is internal one.
 You get all data type by C<available_data_type>.
@@ -2454,21 +2437,6 @@ You get all data type by C<available_data_type>.
     print $dbi->available_data_type;
 
 Type rule of C<from> is enabled on the following pattern.
-
-=item 1. column name
-
-    issue_date
-    issue_datetime
-
-=item 2. table name and column name, separator is dot
-
-    book.issue_date
-    book.issue_datetime
-
-=item 3. table name and column name, separator is double underbar
-
-    book__issue_date
-    book__issue_datetime
 
 =item 4. table name and column name, separator is hyphen
 
@@ -2749,7 +2717,7 @@ Same as C<execute> method's C<type> option.
 
 =item C<type_rule_off> EXPERIMENTAL
 
-Turn type rule off.
+Same as C<execute> method's <type_rule_off>.
 
 =back
 
@@ -2768,8 +2736,6 @@ Create update parameter tag.
 
     set title = :title, author = :author
 
-C<no_set> option is DEPRECATED! use C<assing_param> instead.
-
 =head2 C<where>
 
     my $where = $dbi->where(
@@ -2786,128 +2752,6 @@ Create a new L<DBIx::Custom::Where> object.
 Setup all model objects.
 C<columns> of model object is automatically set, parsing database information.
 
-=head2 C<update_at()> DEPRECATED!
-
-Update statement, using primary key.
-
-    $dbi->update_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5',
-        param => {title => 'Perl'}
-    );
-
-This method is same as C<update()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<update()> is available.
-
-=head2 C<delete_at()> DEPRECATED!
-
-Delete statement, using primary key.
-
-    $dbi->delete_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5'
-    );
-
-This method is same as C<delete()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<delete()> is available.
-
-=head2 C<select_at()> DEPRECATED!
-
-Select statement, using primary key.
-
-    $dbi->select_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5'
-    );
-
-This method is same as C<select()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<select()> is available.
-
-=head2 C<register_tag> DEPRECATED!
-
-    $dbi->register_tag(
-        update => sub {
-            my @columns = @_;
-            
-            # Update parameters
-            my $s = 'set ';
-            $s .= "$_ = ?, " for @columns;
-            $s =~ s/, $//;
-            
-            return [$s, \@columns];
-        }
-    );
-
-Register tag, used by C<execute()>.
-
-See also L<Tags/Tags> about tag registered by default.
-
-Tag parser receive arguments specified in tag.
-In the following tag, 'title' and 'author' is parser arguments
-
-    {update_param title author} 
-
-Tag parser must return array refrence,
-first element is the result statement, 
-second element is column names corresponding to place holders.
-
-In this example, result statement is 
-
-    set title = ?, author = ?
-
-Column names is
-
-    ['title', 'author']
-
-=head2 C<apply_filter> DEPRECATED!
-
-    $dbi->apply_filter(
-        'book',
-        'issue_date' => {
-            out => 'tp_to_date',
-            in  => 'date_to_tp',
-            end => 'tp_to_displaydate'
-        },
-        'write_date' => {
-            out => 'tp_to_date',
-            in  => 'date_to_tp',
-            end => 'tp_to_displaydate'
-        }
-    );
-
-Apply filter to columns.
-C<out> filter is executed before data is send to database.
-C<in> filter is executed after a row is fetch.
-C<end> filter is execute after C<in> filter is executed.
-
-Filter is applied to the follwoing tree column name pattern.
-
-       PETTERN         EXAMPLE
-    1. Column        : author
-    2. Table.Column  : book.author
-    3. Table__Column : book__author
-    4. Table-Column  : book-author
-
-If column name is duplicate with other table,
-Main filter specified by C<table> option is used.
-
-You can set multiple filters at once.
-
-    $dbi->apply_filter(
-        'book',
-        [qw/issue_date write_date/] => {
-            out => 'tp_to_date',
-            in  => 'date_to_tp',
-            end => 'tp_to_displaydate'
-        }
-    );
-
 =head1 Parameter
 
 Parameter start at ':'. This is replaced to place holoder
@@ -2918,96 +2762,6 @@ Parameter start at ':'. This is replaced to place holoder
     );
 
     "select * from book where title = ? and author = ?"
-
-=head1 Tags DEPRECATED!
-
-B<Tag> system is DEPRECATED! use parameter system :name instead.
-Parameter is simple and readable.
-
-Note that you can't use both tag and paramter at same time.
-
-The following tags is available.
-
-=head2 C<?> DEPRECATED!
-
-Placeholder tag.
-
-    {? NAME}    ->   ?
-
-=head2 C<=> DEPRECATED!
-
-Equal tag.
-
-    {= NAME}    ->   NAME = ?
-
-=head2 C<E<lt>E<gt>> DEPRECATED!
-
-Not equal tag.
-
-    {<> NAME}   ->   NAME <> ?
-
-=head2 C<E<lt>> DEPRECATED!
-
-Lower than tag
-
-    {< NAME}    ->   NAME < ?
-
-=head2 C<E<gt>> DEPRECATED!
-
-Greater than tag
-
-    {> NAME}    ->   NAME > ?
-
-=head2 C<E<gt>=> DEPRECATED!
-
-Greater than or equal tag
-
-    {>= NAME}   ->   NAME >= ?
-
-=head2 C<E<lt>=> DEPRECATED!
-
-Lower than or equal tag
-
-    {<= NAME}   ->   NAME <= ?
-
-=head2 C<like> DEPRECATED!
-
-Like tag
-
-    {like NAME}   ->   NAME like ?
-
-=head2 C<in> DEPRECATED!
-
-In tag.
-
-    {in NAME COUNT}   ->   NAME in [?, ?, ..]
-
-=head2 C<insert_param> DEPRECATED!
-
-Insert parameter tag.
-
-    {insert_param NAME1 NAME2}   ->   (NAME1, NAME2) values (?, ?)
-
-=head2 C<update_param> DEPRECATED!
-
-Updata parameter tag.
-
-    {update_param NAME1 NAME2}   ->   set NAME1 = ?, NAME2 = ?
-
-=head2 C<insert_at()> DEPRECATED!
-
-Insert statement, using primary key.
-
-    $dbi->insert_at(
-        table => 'book',
-        primary_key => 'id',
-        where => '5',
-        param => {title => 'Perl'}
-    );
-
-This method is same as C<insert()> exept that
-C<primary_key> is specified and C<where> is constant value or array refrence.
-all option of C<insert()> is available.
 
 =head1 ENVIRONMENT VARIABLE
 

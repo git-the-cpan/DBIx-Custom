@@ -2170,7 +2170,7 @@ $model = $dbi->model('table1');
 eval{$model->execute('select * from table1')};
 ok(!$@);
 
-test 'table_alias';
+test 'column table option';
 $dbi = MyDBI9->connect($NEW_ARGS->{0});
 $dbi->execute($CREATE_TABLE->{0});
 $dbi->execute($CREATE_TABLE->{2});
@@ -2180,32 +2180,32 @@ $dbi->execute('insert into table2 (key1, key3) values (1, 4);');
 $model = $dbi->model('table1');
 $result = $model->select(
     column => [
-        $model->column('table2_alias')
+        $model->column('table2', {alias => 'table2_alias'})
     ],
-    where => {'table2_alias.key3' => 2}
+    where => {'table2_alias.key3' => 4}
 );
 is_deeply($result->one, 
-          {'table2_alias.key1' => 1, 'table2_alias.key3' => 48});
+          {'table2_alias.key1' => 1, 'table2_alias.key3' => 4});
 
 $dbi->separator('__');
 $result = $model->select(
     column => [
-        $model->column('table2_alias')
+        $model->column('table2', {alias => 'table2_alias'})
     ],
-    where => {'table2_alias.key3' => 2}
+    where => {'table2_alias.key3' => 4}
 );
 is_deeply($result->one, 
-          {'table2_alias__key1' => 1, 'table2_alias__key3' => 48});
+          {'table2_alias__key1' => 1, 'table2_alias__key3' => 4});
 
 $dbi->separator('-');
 $result = $model->select(
     column => [
-        $model->column('table2_alias')
+        $model->column('table2', {alias => 'table2_alias'})
     ],
-    where => {'table2_alias.key3' => 2}
+    where => {'table2_alias.key3' => 4}
 );
 is_deeply($result->one, 
-          {'table2_alias-key1' => 1, 'table2_alias-key3' => 48});
+          {'table2_alias-key1' => 1, 'table2_alias-key3' => 4});
 
 test 'type() option';
 $dbi = DBIx::Custom->connect(
@@ -2690,6 +2690,21 @@ $dbi->insert({key1 => 2}, table => 'table1');
 $result = $dbi->select(table => 'table1');
 is($result->fetch->[0], 8);
 
+test 'type_rule and filter order';
+$dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
+$dbi->execute("create table table1 (key1 Date, key2 datetime)");
+$dbi->type_rule(
+    into => {
+        date => sub { $_[0] . 'b' }
+    },
+    from => {
+        date => sub { $_[0] . 'c' }
+    }
+);
+$dbi->insert({key1 => '1'}, table => 'table1', filter => {key1 => sub { $_[0] . 'a' }});
+$result = $dbi->select(table => 'table1');
+$result->filter(key1 => sub { $_[0] . 'd' });
+is($result->fetch_first->[0], '1abcd');
 
 test 'type_rule_off';
 $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
@@ -2833,15 +2848,20 @@ $row = $result->one;
 is($row->{key1}, 6);
 is($row->{key2}, 8);
 $result = $dbi->select(table => 'table1');
-$result->type_rule({date => sub { $_[0] * 3 }});
+$result->type_rule(date => sub { $_[0] * 3 });
 $row = $result->one;
 is($row->{key1}, 6);
 is($row->{key2}, 8);
 $result = $dbi->select(table => 'table1');
+$result->type_rule({date => sub { $_[0] * 3 }});
+$row = $result->one;
+is($row->{key1}, 6);
+is($row->{key2}, 2);
+$result = $dbi->select(table => 'table1');
 $result->type_rule([date => sub { $_[0] * 3 }]);
 $row = $result->one;
 is($row->{key1}, 6);
-is($row->{key2}, 8);
+is($row->{key2}, 2);
 $dbi->register_filter(fivetimes => sub { $_[0] * 5});
 $result = $dbi->select(table => 'table1');
 $result->type_rule(date => 'fivetimes');
@@ -2864,7 +2884,19 @@ $dbi->type_rule(
 $dbi->insert({key1 => 2}, table => 'table1');
 $result = $dbi->select(table => 'table1');
 $result->filter(key1 => sub { $_[0] * 3 });
-is($result->one->{key1}, 6);
+is($result->one->{key1}, 12);
+
+$dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
+$dbi->execute("create table table1 (key1 Date, key2 datetime)");
+$dbi->type_rule(
+    from => {
+        date => sub { $_[0] * 2 },
+    },
+);
+$dbi->insert({key1 => 2}, table => 'table1');
+$result = $dbi->select(table => 'table1');
+$result->filter(key1 => sub { $_[0] * 3 });
+is($result->fetch->[0], 12);
 
 test 'separator';
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
