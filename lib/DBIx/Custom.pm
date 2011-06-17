@@ -1,6 +1,6 @@
 package DBIx::Custom;
 
-our $VERSION = '0.1693';
+our $VERSION = '0.1694';
 use 5.008001;
 
 use Object::Simple -base;
@@ -19,9 +19,10 @@ use Encode qw/encode encode_utf8 decode_utf8/;
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
-our @COMMON_ARGS = qw/table query filter type id primary_key type_rule_off/;
+our @COMMON_ARGS = qw/bind_type table query filter id primary_key
+                      type_rule_off type_rule1_off type_rule2_off type/;
 
-has [qw/connector dsn password user/],
+has [qw/connector dsn password quote user/],
     cache => 0,
     cache_method => sub {
         sub {
@@ -54,7 +55,6 @@ has [qw/connector dsn password user/],
     models => sub { {} },
     query_builder => sub { DBIx::Custom::QueryBuilder->new },
     result_class  => 'DBIx::Custom::Result',
-    reserved_word_quote => '',
     safety_character => '\w',
     stash => sub { {} };
 
@@ -85,7 +85,7 @@ sub assign_param {
     # Create set tag
     my @params;
     my $safety = $self->safety_character;
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     foreach my $column (keys %$param) {
         croak qq{"$column" is not safety column name } . _subname
           unless $column =~ /^[$safety\.]+$/;
@@ -111,7 +111,7 @@ sub column {
     }
     
     # Reserved word quote
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     
     # Separator
     my $separator = $self->separator;
@@ -164,7 +164,7 @@ sub create_query {
         $query = $builder->build_query($source);
 
         # Remove reserved word quote
-        if (my $q = $self->reserved_word_quote) {
+        if (my $q = $self->_quote) {
             $_ =~ s/$q//g for @{$query->columns}
         }
 
@@ -221,12 +221,12 @@ sub dbh {
         $self->{dbh} ||= $self->_connect;
         
         # Quote
-        unless ($self->reserved_word_quote) {
+        if (!defined $self->reserved_word_quote && !defined $self->quote) {
             my $driver = $self->{dbh}->{Driver}->{Name};
             my $quote = $driver eq 'mysql' ? '`' : '"';
-            $self->reserved_word_quote($quote);
+            $self->quote($quote);
         }
-
+        
         return $self->{dbh};
     }
 }
@@ -276,7 +276,7 @@ sub delete {
 
     # Delete statement
     my @sql;
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     push @sql, "delete from $q$table$q $where_clause";
     push @sql, $append if $append;
     my $sql = join(' ', @sql);
@@ -359,9 +359,13 @@ sub execute {
     $tables = [$tables] unless ref $tables eq 'ARRAY';
     my $filter = delete $args{filter};
     $filter = _array_to_hash($filter);
-    my $type = delete $args{type};
-    $type = _array_to_hash($type);
+    my $bind_type = delete $args{bind_type} || delete $args{type};
+    $bind_type = _array_to_hash($bind_type);
     my $type_rule_off = delete $args{type_rule_off};
+    my $type_rule_off_parts = {
+        1 => delete $args{type_rule1_off},
+        2 => delete $args{type_rule2_off}
+    };
     my $query_return = delete $args{query};
     
     # Check argument names
@@ -379,12 +383,12 @@ sub execute {
     unshift @$tables, @{$query->tables};
     my $main_table = pop @$tables;
     $tables = $self->_remove_duplicate_table($tables, $main_table);
-    if (my $q = $self->reserved_word_quote) {
+    if (my $q = $self->_quote) {
         $_ =~ s/$q//g for @$tables;
     }
     
     # Type rule
-    my $type_filter = {};
+    my $type_filters = {};
     unless ($type_rule_off) {
         foreach my $name (keys %$param) {
             my $table;
@@ -395,12 +399,16 @@ sub execute {
             }
             $table ||= $main_table;
             
-            my $into = $self->{_into} || {};
-            if (defined $table && $into->{$table} &&
-                (my $rule = $into->{$table}->{$column}))
-            {
-                $type_filter->{$column} = $rule;
-                $type_filter->{"$table.$column"} = $rule;
+            foreach my $i (1 .. 2) {
+                unless ($type_rule_off_parts->{$i}) {
+                    my $into = $self->{"_into$i"} || {};
+                    if (defined $table && $into->{$table} &&
+                        (my $rule = $into->{$table}->{$column}))
+                    {
+                        $type_filters->{$i}->{$column} = $rule;
+                        $type_filters->{$i}->{"$table.$column"} = $rule;
+                    }
+                }
             }
         }
     }
@@ -433,8 +441,8 @@ sub execute {
         $param,
         $query->columns,
         $filter,
-        $type_filter,
-        $type
+        $type_filters,
+        $bind_type
     );
     
     # Execute
@@ -442,8 +450,12 @@ sub execute {
     my $affected;
     eval {
         for (my $i = 0; $i < @$bind; $i++) {
-            my $type = $bind->[$i]->{type};
-            $sth->bind_param($i + 1, $bind->[$i]->{value}, $type ? $type : ());
+            my $bind_type = $bind->[$i]->{bind_type};
+            $sth->bind_param(
+                $i + 1,
+                $bind->[$i]->{value},
+                $bind_type ? $bind_type : ()
+            );
         }
         $affected = $sth->execute;
     };
@@ -491,7 +503,10 @@ sub execute {
             default_filter => $self->{default_in_filter},
             filter => $filter->{in} || {},
             end_filter => $filter->{end} || {},
-            type_rule => \%{$self->type_rule->{from}},
+            type_rule => {
+                from1 => $self->type_rule->{from1},
+                from2 => $self->type_rule->{from2}
+            },
         );
 
         return $result;
@@ -536,7 +551,7 @@ sub insert {
     }
 
     # Reserved word quote
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     
     # Insert statement
     my @sql;
@@ -558,7 +573,7 @@ sub insert_param {
     
     # Create insert parameter tag
     my $safety = $self->safety_character;
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     my @columns;
     my @placeholders;
     foreach my $column (keys %$param) {
@@ -695,7 +710,7 @@ sub mycolumn {
     
     # Create column clause
     my @column;
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     $columns ||= [];
     push @column, "$q$table$q.$q$_$q as $q$_$q" for @$columns;
     
@@ -791,7 +806,7 @@ sub select {
     push @sql, 'select';
     
     # Reserved word quote
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     
     # Prefix
     push @sql, $prefix if defined $prefix;
@@ -956,46 +971,50 @@ sub type_rule {
         my $type_rule = ref $_[0] eq 'HASH' ? $_[0] : {@_};
         
         # Into
-        $type_rule->{into} = _array_to_hash($type_rule->{into});
-        $self->{type_rule} = $type_rule;
-        $self->{_into} = {};
-        foreach my $type_name (keys %{$type_rule->{into} || {}}) {
-            croak qq{type name of into section must be lower case}
-              if $type_name =~ /[A-Z]/;
-        }
-        $self->each_column(sub {
-            my ($dbi, $table, $column, $column_info) = @_;
-            
-            my $type_name = lc $column_info->{TYPE_NAME};
-            if ($type_rule->{into} &&
-                (my $filter = $type_rule->{into}->{$type_name}))
-            {
-                return unless exists $type_rule->{into}->{$type_name};
-                if  (defined $filter && ref $filter ne 'CODE') 
+        foreach my $i (1 .. 2) {
+            my $into = "into$i";
+            $type_rule->{$into} = _array_to_hash($type_rule->{$into});
+            $self->{type_rule} = $type_rule;
+            $self->{"_$into"} = {};
+            foreach my $type_name (keys %{$type_rule->{$into} || {}}) {
+                croak qq{type name of $into section must be lower case}
+                  if $type_name =~ /[A-Z]/;
+            }
+            $self->each_column(sub {
+                my ($dbi, $table, $column, $column_info) = @_;
+                
+                my $type_name = lc $column_info->{TYPE_NAME};
+                if ($type_rule->{$into} &&
+                    (my $filter = $type_rule->{$into}->{$type_name}))
                 {
-                    my $fname = $filter;
+                    return unless exists $type_rule->{$into}->{$type_name};
+                    if  (defined $filter && ref $filter ne 'CODE') 
+                    {
+                        my $fname = $filter;
+                        croak qq{Filter "$fname" is not registered" } . _subname
+                          unless exists $self->filters->{$fname};
+                        
+                        $filter = $self->filters->{$fname};
+                    }
+
+                    $self->{"_$into"}{$table}{$column} = $filter;
+                }
+            });
+        }
+
+        # From
+        foreach my $i (1 .. 2) {
+            $type_rule->{"from$i"} = _array_to_hash($type_rule->{"from$i"});
+            foreach my $data_type (keys %{$type_rule->{"from$i"} || {}}) {
+                croak qq{data type of from$i section must be lower case or number}
+                  if $data_type =~ /[A-Z]/;
+                my $fname = $type_rule->{"from$i"}{$data_type};
+                if (defined $fname && ref $fname ne 'CODE') {
                     croak qq{Filter "$fname" is not registered" } . _subname
                       unless exists $self->filters->{$fname};
                     
-                    $filter = $self->filters->{$fname};
+                    $type_rule->{"from$i"}{$data_type} = $self->filters->{$fname};
                 }
-
-                $self->{_into}{$table}{$column} = $filter;
-            }
-        });
-        
-
-        # From
-        $type_rule->{from} = _array_to_hash($type_rule->{from});
-        foreach my $data_type (keys %{$type_rule->{from} || {}}) {
-            croak qq{data type of into section must be lower case or number}
-              if $data_type =~ /[A-Z]/;
-            my $fname = $type_rule->{from}{$data_type};
-            if (defined $fname && ref $fname ne 'CODE') {
-                croak qq{Filter "$fname" is not registered" } . _subname
-                  unless exists $self->filters->{$fname};
-                
-                $type_rule->{from}{$data_type} = $self->filters->{$fname};
             }
         }
         
@@ -1061,7 +1080,7 @@ sub update {
     
     # Update statement
     my @sql;
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     push @sql, "update $q$table$q $update_clause $where_clause";
     push @sql, $append if $append;
     
@@ -1098,7 +1117,7 @@ sub where {
     return DBIx::Custom::Where->new(
         query_builder => $self->query_builder,
         safety_character => $self->safety_character,
-        reserved_word_quote => $self->reserved_word_quote,
+        quote => $self->_quote,
         @_
     );
 }
@@ -1173,7 +1192,7 @@ sub _apply_filter {
 }
 
 sub _create_bind_values {
-    my ($self, $params, $columns, $filter, $type_filter, $type) = @_;
+    my ($self, $params, $columns, $filter, $type_filters, $bind_type) = @_;
     
     # Create bind values
     my $bind = [];
@@ -1206,11 +1225,14 @@ sub _create_bind_values {
         $value = $f->($value) if $f;
         
         # Type rule
-        my $tf = $type_filter->{$column};
-        $value = $tf->($value) if $tf;
+        foreach my $i (1 .. 2) {
+            my $type_filter = $type_filters->{$i};
+            my $tf = $type_filter->{$column};
+            $value = $tf->($value) if $tf;
+        }
         
         # Bind values
-        push @$bind, {value => $value, type => $type->{$column}};
+        push @$bind, {value => $value, bind_type => $bind_type->{$column}};
         
         # Count up 
         $count->{$column}++;
@@ -1313,7 +1335,7 @@ sub _push_join {
     
     # Push join clause
     my $tree = {};
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     for (my $i = 0; $i < @$join; $i++) {
         
         # Search table in join clause
@@ -1347,6 +1369,14 @@ sub _push_join {
     }
 }
 
+sub _quote {
+    my $self = shift;
+    
+    return defined $self->reserved_word_quote ? $self->reserved_word_quote
+         : defined $self->quote ? $self->quote
+         : '';
+}
+
 sub _remove_duplicate_table {
     my ($self, $tables, $main_table) = @_;
     
@@ -1363,7 +1393,7 @@ sub _search_tables {
     # Search tables
     my $tables = [];
     my $safety_character = $self->safety_character;
-    my $q = $self->reserved_word_quote;
+    my $q = $self->_quote;
     my $q_re = quotemeta($q);
     my $table_re = $q ? qr/(?:^|[^$safety_character])$q_re?([$safety_character]+)$q_re?\./
                       : qr/(?:^|[^$safety_character])([$safety_character]+)\./;
@@ -1382,7 +1412,7 @@ sub _where_to_obj {
     # Hash
     if (ref $where eq 'HASH') {
         my $clause = ['and'];
-        my $q = $self->reserved_word_quote;
+        my $q = $self->_quote;
         foreach my $column (keys %$where) {
             my $column_quote = "$q$column$q";
             $column_quote =~ s/\./$q.$q/;
@@ -1409,7 +1439,7 @@ sub _where_to_obj {
     
     # Check where argument
     croak qq{"where" must be hash reference or DBIx::Custom::Where object}
-        . qq{or array reference, which contains where clause and paramter}
+        . qq{or array reference, which contains where clause and parameter}
         . _subname
       unless ref $obj eq 'DBIx::Custom::Where';
     
@@ -1548,11 +1578,9 @@ sub register_tag {
 
 # DEPRECATED!
 has 'data_source';
-
-# DEPRECATED!
-has dbi_options => sub { {} },
-    filter_check  => 1;
-
+has dbi_options => sub { {} };
+has filter_check  => 1;
+has 'reserved_word_quote';
 
 # DEPRECATED!
 sub default_bind_filter {
@@ -1780,7 +1808,7 @@ L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki>
 =head2 C<connector>
 
     my $connector = $dbi->connector;
-    $dbi          = $dbi->connector(DBIx::Connector->new(...));
+    $dbi = $dbi->connector(DBIx::Connector->new(...));
 
 Connection manager object. if connector is set, you can get C<dbh()>
 from connection manager. conection manager object must have dbh() mehtod.
@@ -1800,14 +1828,14 @@ C<default_dbi_option> to L<DBIx::Connector>.
 =head2 C<dsn>
 
     my $dsn = $dbi->dsn;
-    $dbi    = $dbi->dsn("DBI:mysql:database=dbname");
+    $dbi = $dbi->dsn("DBI:mysql:database=dbname");
 
 Data source name, used when C<connect()> is executed.
 
 =head2 C<dbi_option>
 
     my $dbi_option = $dbi->dbi_option;
-    $dbi           = $dbi->dbi_option($dbi_option);
+    $dbi = $dbi->dbi_option($dbi_option);
 
 L<DBI> option, used when C<connect()> is executed.
 Each value in option override the value of C<default_dbi_option>.
@@ -1815,7 +1843,7 @@ Each value in option override the value of C<default_dbi_option>.
 =head2 C<default_dbi_option>
 
     my $default_dbi_option = $dbi->default_dbi_option;
-    $dbi            = $dbi->default_dbi_option($default_dbi_option);
+    $dbi = $dbi->default_dbi_option($default_dbi_option);
 
 L<DBI> default option, used when C<connect()> is executed,
 default to the following values.
@@ -1832,49 +1860,51 @@ the value is used to check if the process is in transaction.
 =head2 C<filters>
 
     my $filters = $dbi->filters;
-    $dbi        = $dbi->filters(\%filters);
+    $dbi = $dbi->filters(\%filters);
 
 Filters, registered by C<register_filter()>.
 
 =head2 C<models>
 
     my $models = $dbi->models;
-    $dbi       = $dbi->models(\%models);
+    $dbi = $dbi->models(\%models);
 
 Models, included by C<include_model()>.
 
 =head2 C<password>
 
     my $password = $dbi->password;
-    $dbi         = $dbi->password('lkj&le`@s');
+    $dbi = $dbi->password('lkj&le`@s');
 
 Password, used when C<connect()> is executed.
 
 =head2 C<query_builder>
 
     my $sql_class = $dbi->query_builder;
-    $dbi          = $dbi->query_builder(DBIx::Custom::QueryBuilder->new);
+    $dbi = $dbi->query_builder(DBIx::Custom::QueryBuilder->new);
 
 Query builder, default to L<DBIx::Custom::QueryBuilder> object.
 
-=head2 C<reserved_word_quote>
+=head2 C<quote>
 
-     my reserved_word_quote = $dbi->reserved_word_quote;
-     $dbi                   = $dbi->reserved_word_quote('"');
+     my quote = $dbi->quote;
+     $dbi = $dbi->quote('"');
 
-Reserved word quote, default to empty string.
+Reserved word quote.
+Default to double quote '"' except for mysql.
+In mysql, default to back quote '`'
 
 =head2 C<result_class>
 
     my $result_class = $dbi->result_class;
-    $dbi             = $dbi->result_class('DBIx::Custom::Result');
+    $dbi = $dbi->result_class('DBIx::Custom::Result');
 
 Result class, default to L<DBIx::Custom::Result>.
 
 =head2 C<safety_character>
 
     my $safety_character = $self->safety_character;
-    $dbi                 = $self->safety_character($character);
+    $dbi = $self->safety_character($character);
 
 Regex of safety character for table and column name, default to '\w'.
 Note that you don't have to specify like '[\w]'.
@@ -1882,7 +1912,7 @@ Note that you don't have to specify like '[\w]'.
 =head2 C<user>
 
     my $user = $dbi->user;
-    $dbi     = $dbi->user('Ken');
+    $dbi = $dbi->user('Ken');
 
 User name, used when C<connect()> is executed.
 
@@ -2081,7 +2111,7 @@ Specify database data type.
     type => [image => DBI::SQL_BLOB]
     type => [[qw/image audio/] => DBI::SQL_BLOB]
 
-This is used to bind paramter by C<bind_param()> of statment handle.
+This is used to bind parameter by C<bind_param()> of statment handle.
 
     $sth->bind_param($pos, $value, DBI::SQL_BLOB);
 
@@ -2092,7 +2122,19 @@ by C<insert()>, C<update()>, C<delete()>, C<select()>.
 
     type_rule_off => 1
 
-Trun type rule off.
+Turn C<into1> and C<into2> type rule off.
+
+=item C<type_rule1_off> EXPERIMENTAL
+
+    type_rule1_off => 1
+
+Turn C<into1> type rule off.
+
+=item C<type_rule2_off> EXPERIMENTAL
+
+    type_rule2_off => 1
+
+Turn C<into2> type rule off.
 
 =back
 
@@ -2155,6 +2197,18 @@ Same as C<execute> method's C<type> option.
 =item C<type_rule_off> EXPERIMENTAL
 
 Same as C<execute> method's C<type_rule_off> option.
+
+=item C<type_rule1_off> EXPERIMENTAL
+
+    type_rule1_off => 1
+
+Same as C<execute> method's C<type_rule1_off> option.
+
+=item C<type_rule2_off> EXPERIMENTAL
+
+    type_rule2_off => 1
+
+Same as C<execute> method's C<type_rule2_off> option.
 
 =back
 
@@ -2241,6 +2295,18 @@ Same as C<execute> method's C<type> option.
 
 Same as C<execute> method's C<type_rule_off> option.
 
+=item C<type_rule1_off> EXPERIMENTAL
+
+    type_rule1_off => 1
+
+Same as C<execute> method's C<type_rule1_off> option.
+
+=item C<type_rule2_off> EXPERIMENTAL
+
+    type_rule2_off => 1
+
+Same as C<execute> method's C<type_rule2_off> option.
+
 =back
 
 =over 4
@@ -2305,7 +2371,7 @@ See L<DBIx::Custom::Model> to know model features.
 
     my $param = $dbi->merge_param({key1 => 1}, {key1 => 1, key2 => 2});
 
-Merge paramters.
+Merge parameters.
 
 $param:
 
@@ -2389,14 +2455,23 @@ Register filters, used by C<filter> option of many methods.
 =head2 C<type_rule> EXPERIMENTAL
 
     $dbi->type_rule(
-        into => {
+        into1 => {
             date => sub { ... },
             datetime => sub { ... }
         },
-        from => {
+        into2 => {
+            date => sub { ... },
+            datetime => sub { ... }
+        },
+        from1 => {
             # DATE
             9 => sub { ... },
-            
+            # DATETIME or TIMESTAMP
+            11 => sub { ... },
+        }
+        from2 => {
+            # DATE
+            9 => sub { ... },
             # DATETIME or TIMESTAMP
             11 => sub { ... },
         }
@@ -2405,12 +2480,17 @@ Register filters, used by C<filter> option of many methods.
 Filtering rule when data is send into and get from database.
 This has a little complex problem.
 
-In C<into> you can specify type name as same as type name defined
+In C<into1> and C<into2> you can specify
+type name as same as type name defined
 by create table, such as C<DATETIME> or C<DATE>.
-Type rule of C<into> is enabled on the following pattern.
+
+C<into2> is executed after C<into1>.
 
 Note that type name and data type don't contain upper case.
-If that contain upper case charactor, you specify it lower case.
+If these contain upper case charactor, you convert it to lower case.
+
+Type rule of C<into1> and C<into2> is enabled on the following
+column name.
 
 =over 4
 
@@ -2430,33 +2510,18 @@ You get all type name used in database by C<available_type_name>.
 
     print $dbi->available_type_name;
 
-In C<from> you can't specify type name defined by create table.
-You must specify data type, this is internal one.
+In C<from1> and C<from2> you data type, not type name.
+C<from2> is executed after C<from1>.
 You get all data type by C<available_data_type>.
 
     print $dbi->available_data_type;
 
-Type rule of C<from> is enabled on the following pattern.
-
-=item 4. table name and column name, separator is hyphen
-
-    book-issue_date
-    book-issue_datetime
-
-This is useful in HTML.
-
-=back
-
-You can also specify multiple types
+You can also specify multiple types at once.
 
     $dbi->type_rule(
-        into => [
+        into1 => [
             [qw/DATE DATETIME/] => sub { ... },
         ],
-        from => {
-            # DATE
-            [qw/9 11/] => sub { ... },
-        }
     );
 
 =head2 C<select>
@@ -2612,6 +2677,18 @@ Table name.
 
 Same as C<execute> method's C<type_rule_off> option.
 
+=item C<type_rule1_off> EXPERIMENTAL
+
+    type_rule1_off => 1
+
+Same as C<execute> method's C<type_rule1_off> option.
+
+=item C<type_rule2_off> EXPERIMENTAL
+
+    type_rule2_off => 1
+
+Same as C<execute> method's C<type_rule2_off> option.
+
 =item C<where>
     
     # Hash refrence
@@ -2717,7 +2794,19 @@ Same as C<execute> method's C<type> option.
 
 =item C<type_rule_off> EXPERIMENTAL
 
-Same as C<execute> method's <type_rule_off>.
+Same as C<execute> method's C<type_rule_off> option.
+
+=item C<type_rule1_off> EXPERIMENTAL
+
+    type_rule1_off => 1
+
+Same as C<execute> method's C<type_rule1_off> option.
+
+=item C<type_rule2_off> EXPERIMENTAL
+
+    type_rule2_off => 1
+
+Same as C<execute> method's C<type_rule2_off> option.
 
 =back
 
