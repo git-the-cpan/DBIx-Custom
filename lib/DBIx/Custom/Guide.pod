@@ -19,7 +19,7 @@ This module have the following features.
 
 =item * Creating where clause flexibly
 
-=imte * Support model
+=item * Support model
 
 =back
 
@@ -248,9 +248,6 @@ use C<execute> to execute SQL.
 
     my $sql = "select * from book where title = :title and author like :author;"
     $dbi->execute($sql, {title => 'Perl', author => '%Ken%'});
-
-You can specify values embedded into place holder as hash reference using
-C<param> option.
 
 You can specify C<filter> at C<execute>.
 

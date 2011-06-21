@@ -1,9 +1,8 @@
 package DBIx::Custom;
-
-our $VERSION = '0.1695';
-use 5.008001;
-
 use Object::Simple -base;
+
+our $VERSION = '0.1696';
+use 5.008001;
 
 use Carp 'croak';
 use DBI;
@@ -134,69 +133,6 @@ sub connect {
     return $self;
 }
 
-sub create_query {
-    my ($self, $source) = @_;
-    
-    # Cache
-    my $cache = $self->cache;
-    
-    # Query
-    my $query;
-    
-    # Get cached query
-    if ($cache) {
-        
-        # Get query
-        my $q = $self->cache_method->($self, $source);
-        
-        # Create query
-        if ($q) {
-            $query = DBIx::Custom::Query->new($q);
-            $query->filters($self->filters);
-        }
-    }
-    
-    # Create query
-    unless ($query) {
-
-        # Create query
-        my $builder = $self->query_builder;
-        $query = $builder->build_query($source);
-
-        # Remove reserved word quote
-        if (my $q = $self->_quote) {
-            $_ =~ s/$q//g for @{$query->columns}
-        }
-
-        # Save query to cache
-        $self->cache_method->(
-            $self, $source,
-            {
-                sql     => $query->sql, 
-                columns => $query->columns,
-                tables  => $query->tables
-            }
-        ) if $cache;
-    }
-    
-    # Prepare statement handle
-    my $sth;
-    eval { $sth = $self->dbh->prepare($query->{sql})};
-    
-    if ($@) {
-        $self->_croak($@, qq{. Following SQL is executed.\n}
-                        . qq{$query->{sql}\n} . _subname);
-    }
-    
-    # Set statement handle
-    $query->sth($sth);
-    
-    # Set filters
-    $query->filters($self->filters);
-    
-    return $query;
-}
-
 sub dbh {
     my $self = shift;
     
@@ -231,8 +167,8 @@ sub dbh {
     }
 }
 
-our %DELETE_ARGS
-  = map { $_ => 1 } @COMMON_ARGS, qw/where append allow_delete_all where_param/;
+our %DELETE_ARGS = map { $_ => 1 } @COMMON_ARGS,
+  qw/where append allow_delete_all where_param prefix/;
 
 sub delete {
     my ($self, %args) = @_;
@@ -257,11 +193,16 @@ sub delete {
           "must be specified when id is specified " . _subname
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    my $prefix = delete $args{prefix};
     
     # Where
-    $where = $self->_create_param_from_id($id, $primary_key) if $id;
+    $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
     my $where_clause = '';
-    if (ref $where) {
+    if (ref $where eq 'ARRAY' && !ref $where->[0]) {
+        $where_clause = "where " . $where->[0];
+        $where_param = $where->[1];
+    }
+    elsif (ref $where) {
         $where = $self->_where_to_obj($where);
         $where_param = keys %$where_param
                      ? $self->merge_param($where_param, $where->param)
@@ -277,17 +218,14 @@ sub delete {
     # Delete statement
     my @sql;
     my $q = $self->_quote;
-    push @sql, "delete from $q$table$q $where_clause";
-    push @sql, $append if $append;
+    push @sql, "delete";
+    push @sql, $prefix if defined $prefix;
+    push @sql, "from $q$table$q $where_clause";
+    push @sql, $append if defined $append;
     my $sql = join(' ', @sql);
     
     # Execute query
-    return $self->execute(
-        $sql,
-        param => $where_param,
-        table => $table,
-        %args
-    );
+    return $self->execute($sql, $where_param, table => $table, %args);
 }
 
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
@@ -375,7 +313,7 @@ sub execute {
     }
     
     # Create query
-    $query = $self->create_query($query) unless ref $query;
+    $query = $self->_create_query($query) unless ref $query;
     return $query if $query_return;
     $filter ||= $query->filter;
     
@@ -537,6 +475,7 @@ sub insert {
           "must be specified when id is specified " . _subname
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    my $prefix = delete $args{prefix};
 
     # Check arguments
     foreach my $name (keys %args) {
@@ -545,7 +484,7 @@ sub insert {
     }
 
     # Merge parameter
-    if ($id) {
+    if (defined $id) {
         my $id_param = $self->_create_param_from_id($id, $primary_key);
         $param = $self->merge_param($id_param, $param);
     }
@@ -555,17 +494,14 @@ sub insert {
     
     # Insert statement
     my @sql;
-    push @sql, "insert into $q$table$q " . $self->insert_param($param);
-    push @sql, $append if $append;
+    push @sql, "insert";
+    push @sql, $prefix if defined $prefix;
+    push @sql, "into $q$table$q " . $self->insert_param($param);
+    push @sql, $append if defined $append;
     my $sql = join (' ', @sql);
     
     # Execute query
-    return $self->execute(
-        $sql,
-        param => $param,
-        table => $table,
-        %args
-    );
+    return $self->execute($sql, $param, table => $table, %args);
 }
 
 sub insert_param {
@@ -757,10 +693,8 @@ sub register_filter {
     return $self;
 }
 
-our %SELECT_ARGS
-  = map { $_ => 1 } @COMMON_ARGS,
-                    qw/column where relation join param where_param wrap
-                       prefix/;
+our %SELECT_ARGS = map { $_ => 1 } @COMMON_ARGS,
+  qw/column where relation join param where_param wrap prefix/;
 
 sub select {
     my ($self, %args) = @_;
@@ -853,8 +787,12 @@ sub select {
     
     # Where
     my $where_clause = '';
-    $where = $self->_create_param_from_id($id, $primary_key) if $id;
-    if (ref $where) {
+    $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
+    if (ref $where eq 'ARRAY' && !ref $where->[0]) {
+        $where_clause = "where " . $where->[0];
+        $where_param = $where->[1];
+    }
+    elsif (ref $where) {
         $where = $self->_where_to_obj($where);
         $where_param = keys %$where_param
                      ? $self->merge_param($where_param, $where->param)
@@ -878,7 +816,7 @@ sub select {
     $self->_push_relation(\@sql, $tables, $relation, $where_clause eq '' ? 1 : 0);
     
     # Append
-    push @sql, $append if $append;
+    push @sql, $append if defined $append;
     
     # Wrap
     if ($wrap) {
@@ -892,12 +830,7 @@ sub select {
     my $sql = join (' ', @sql);
     
     # Execute query
-    my $result = $self->execute(
-        $sql,
-        param => $where_param, 
-        table => $tables,
-        %args
-    );
+    my $result = $self->execute($sql, $where_param, table => $tables, %args);
     
     return $result;
 }
@@ -1024,8 +957,8 @@ sub type_rule {
     return $self->{type_rule} || {};
 }
 
-our %UPDATE_ARGS
-  = map { $_ => 1 } @COMMON_ARGS, qw/param where allow_update_all where_param/;
+our %UPDATE_ARGS = map { $_ => 1 } @COMMON_ARGS,
+  qw/param where allow_update_all where_param prefix/;
 
 sub update {
     my $self = shift;
@@ -1039,9 +972,9 @@ sub update {
       unless $table;
     my $p = delete $args{param} || {};
     $param  ||= $p;
-    my $where            = delete $args{where} || {};
-    my $where_param      = delete $args{where_param} || {};
-    my $append           = delete $args{append} || '';
+    my $where = delete $args{where} || {};
+    my $where_param = delete $args{where_param} || {};
+    my $append = delete $args{append} || '';
     my $allow_update_all = delete $args{allow_update_all};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
@@ -1049,6 +982,7 @@ sub update {
           "must be specified when id is specified " . _subname
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    my $prefix = delete $args{prefix};
     
     # Check argument names
     foreach my $name (keys %args) {
@@ -1060,9 +994,13 @@ sub update {
     my $update_clause = $self->update_param($param);
 
     # Where
-    $where = $self->_create_param_from_id($id, $primary_key) if $id;
+    $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
     my $where_clause = '';
-    if (ref $where) {
+    if (ref $where eq 'ARRAY' && !ref $where->[0]) {
+        $where_clause = "where " . $where->[0];
+        $where_param = $where->[1];
+    }
+    elsif (ref $where) {
         $where = $self->_where_to_obj($where);
         $where_param = keys %$where_param
                      ? $self->merge_param($where_param, $where->param)
@@ -1081,21 +1019,16 @@ sub update {
     # Update statement
     my @sql;
     my $q = $self->_quote;
-    push @sql, "update $q$table$q $update_clause $where_clause";
-    push @sql, $append if $append;
+    push @sql, "update";
+    push @sql, $prefix if defined $prefix;
+    push @sql, "$q$table$q $update_clause $where_clause";
+    push @sql, $append if defined $append;
     
     # SQL
     my $sql = join(' ', @sql);
     
     # Execute query
-    my $ret_val = $self->execute(
-        $sql,
-        param  => $param, 
-        table => $table,
-        %args
-    );
-    
-    return $ret_val;
+    return $self->execute($sql, $param, table => $table, %args);
 }
 
 sub update_all { shift->update(allow_update_all => 1, @_) };
@@ -1122,73 +1055,68 @@ sub where {
     );
 }
 
-sub _apply_filter {
-    my ($self, $table, @cinfos) = @_;
-
-    # Initialize filters
-    $self->{filter} ||= {};
-    $self->{filter}{out} ||= {};
-    $self->{filter}{in} ||= {};
-    $self->{filter}{end} ||= {};
+sub _create_query {
     
-    # Usage
-    my $usage = "Usage: \$dbi->apply_filter(" .
-                "TABLE, COLUMN1, {in => INFILTER1, out => OUTFILTER1, end => ENDFILTER1}, " .
-                "COLUMN2, {in => INFILTER2, out => OUTFILTER2, end => ENDFILTER2}, ...)";
+    my ($self, $source) = @_;
     
-    # Apply filter
-    for (my $i = 0; $i < @cinfos; $i += 2) {
+    # Cache
+    my $cache = $self->cache;
+    
+    # Query
+    my $query;
+    
+    # Get cached query
+    if ($cache) {
         
-        # Column
-        my $column = $cinfos[$i];
-        if (ref $column eq 'ARRAY') {
-            foreach my $c (@$column) {
-                push @cinfos, $c, $cinfos[$i + 1];
-            }
-            next;
-        }
+        # Get query
+        my $q = $self->cache_method->($self, $source);
         
-        # Filter infomation
-        my $finfo = $cinfos[$i + 1] || {};
-        croak "$usage (table: $table) " . _subname
-          unless  ref $finfo eq 'HASH';
-        foreach my $ftype (keys %$finfo) {
-            croak "$usage (table: $table) " . _subname
-              unless $ftype eq 'in' || $ftype eq 'out' || $ftype eq 'end'; 
-        }
-        
-        # Set filters
-        foreach my $way (qw/in out end/) {
-        
-            # Filter
-            my $filter = $finfo->{$way};
-            
-            # Filter state
-            my $state = !exists $finfo->{$way} ? 'not_exists'
-                      : !defined $filter        ? 'not_defined'
-                      : ref $filter eq 'CODE'   ? 'code'
-                      : 'name';
-            
-            # Filter is not exists
-            next if $state eq 'not_exists';
-            
-            # Check filter name
-            croak qq{Filter "$filter" is not registered } . _subname
-              if  $state eq 'name'
-               && ! exists $self->filters->{$filter};
-            
-            # Set filter
-            my $f = $state eq 'not_defined' ? undef
-                  : $state eq 'code'        ? $filter
-                  : $self->filters->{$filter};
-            $self->{filter}{$way}{$table}{$column} = $f;
-            $self->{filter}{$way}{$table}{"$table.$column"} = $f;
-            $self->{filter}{$way}{$table}{"${table}__$column"} = $f;
-            $self->{filter}{$way}{$table}{"${table}-$column"} = $f;
+        # Create query
+        if ($q) {
+            $query = DBIx::Custom::Query->new($q);
+            $query->filters($self->filters);
         }
     }
     
-    return $self;
+    # Create query
+    unless ($query) {
+
+        # Create query
+        my $builder = $self->query_builder;
+        $query = $builder->build_query($source);
+
+        # Remove reserved word quote
+        if (my $q = $self->_quote) {
+            $_ =~ s/$q//g for @{$query->columns}
+        }
+
+        # Save query to cache
+        $self->cache_method->(
+            $self, $source,
+            {
+                sql     => $query->sql, 
+                columns => $query->columns,
+                tables  => $query->tables
+            }
+        ) if $cache;
+    }
+    
+    # Prepare statement handle
+    my $sth;
+    eval { $sth = $self->dbh->prepare($query->{sql})};
+    
+    if ($@) {
+        $self->_croak($@, qq{. Following SQL is executed.\n}
+                        . qq{$query->{sql}\n} . _subname);
+    }
+    
+    # Set statement handle
+    $query->sth($sth);
+    
+    # Set filters
+    $query->filters($self->filters);
+    
+    return $query;
 }
 
 sub _create_bind_values {
@@ -1246,7 +1174,7 @@ sub _create_param_from_id {
     
     # Create parameter
     my $param = {};
-    if ($id) {
+    if (defined $id) {
         $id = [$id] unless ref $id;
         croak qq{"id" must be constant value or array reference}
             . " (" . (caller 1)[3] . ")"
@@ -1426,11 +1354,8 @@ sub _where_to_obj {
         $obj = $where;
     }
     
-    # Array(DEPRECATED!)
+    # Array
     elsif (ref $where eq 'ARRAY') {
-        warn "\$dbi->select(where => [CLAUSE, PARAMETER]) is DEPRECATED." .
-             "use \$dbi->select(where => \$dbi->where(clause => " .
-             "CLAUSE, where_param => PARAMETER));";
         $obj = $self->where(
             clause => $where->[0],
             param  => $where->[1]
@@ -1444,6 +1369,82 @@ sub _where_to_obj {
       unless ref $obj eq 'DBIx::Custom::Where';
     
     return $obj;
+}
+
+# DEPRECATED!
+sub _apply_filter {
+    my ($self, $table, @cinfos) = @_;
+
+    # Initialize filters
+    $self->{filter} ||= {};
+    $self->{filter}{out} ||= {};
+    $self->{filter}{in} ||= {};
+    $self->{filter}{end} ||= {};
+    
+    # Usage
+    my $usage = "Usage: \$dbi->apply_filter(" .
+                "TABLE, COLUMN1, {in => INFILTER1, out => OUTFILTER1, end => ENDFILTER1}, " .
+                "COLUMN2, {in => INFILTER2, out => OUTFILTER2, end => ENDFILTER2}, ...)";
+    
+    # Apply filter
+    for (my $i = 0; $i < @cinfos; $i += 2) {
+        
+        # Column
+        my $column = $cinfos[$i];
+        if (ref $column eq 'ARRAY') {
+            foreach my $c (@$column) {
+                push @cinfos, $c, $cinfos[$i + 1];
+            }
+            next;
+        }
+        
+        # Filter infomation
+        my $finfo = $cinfos[$i + 1] || {};
+        croak "$usage (table: $table) " . _subname
+          unless  ref $finfo eq 'HASH';
+        foreach my $ftype (keys %$finfo) {
+            croak "$usage (table: $table) " . _subname
+              unless $ftype eq 'in' || $ftype eq 'out' || $ftype eq 'end'; 
+        }
+        
+        # Set filters
+        foreach my $way (qw/in out end/) {
+        
+            # Filter
+            my $filter = $finfo->{$way};
+            
+            # Filter state
+            my $state = !exists $finfo->{$way} ? 'not_exists'
+                      : !defined $filter        ? 'not_defined'
+                      : ref $filter eq 'CODE'   ? 'code'
+                      : 'name';
+            
+            # Filter is not exists
+            next if $state eq 'not_exists';
+            
+            # Check filter name
+            croak qq{Filter "$filter" is not registered } . _subname
+              if  $state eq 'name'
+               && ! exists $self->filters->{$filter};
+            
+            # Set filter
+            my $f = $state eq 'not_defined' ? undef
+                  : $state eq 'code'        ? $filter
+                  : $self->filters->{$filter};
+            $self->{filter}{$way}{$table}{$column} = $f;
+            $self->{filter}{$way}{$table}{"$table.$column"} = $f;
+            $self->{filter}{$way}{$table}{"${table}__$column"} = $f;
+            $self->{filter}{$way}{$table}{"${table}-$column"} = $f;
+        }
+    }
+    
+    return $self;
+}
+
+# DEPRECATED!
+sub create_query {
+    warn "create_query is DEPRECATED! use query option of each method";
+    shift->_create_query(@_);
 }
 
 # DEPRECATED!
@@ -1705,30 +1706,18 @@ DBIx::Custom - Useful database access, respecting SQL!
     );
 
     # Insert 
-    $dbi->insert(
-        table  => 'book',
-        param  => {title => 'Perl', author => 'Ken'}
-    );
+    $dbi->insert({title => 'Perl', author => 'Ken'}, table  => 'book');
     
     # Update 
-    $dbi->update(
-        table  => 'book', 
-        param  => {title => 'Perl', author => 'Ken'}, 
-        where  => {id => 5},
-    );
+    $dbi->update({title => 'Perl', author => 'Ken'}, table  => 'book',
+      where  => {id => 5});
     
     # Delete
-    $dbi->delete(
-        table  => 'book',
-        where  => {author => 'Ken'},
-    );
+    $dbi->delete(table  => 'book', where => {author => 'Ken'});
 
     # Select
-    my $result = $dbi->select(
-        table  => 'book',
-        column => ['title', 'author'],
-        where  => {author => 'Ken'},
-    );
+    my $result = $dbi->select(table  => 'book',
+      column => ['title', 'author'], where  => {author => 'Ken'});
 
     # Select, more complex
     my $result = $dbi->select(
@@ -1755,7 +1744,7 @@ DBIx::Custom - Useful database access, respecting SQL!
     # Execute SQL with parameter.
     $dbi->execute(
         "select id from book where author = :author and title like :title",
-        param  => {author => 'ken', title => '%Perl%'}
+        {author => 'ken', title => '%Perl%'}
     );
     
 =head1 DESCRIPTIONS
@@ -1764,34 +1753,20 @@ L<DBIx::Custom> is L<DBI> wrapper module.
 
 =head1 FEATURES
 
+L<DBIx::Custom> is the wrapper class of L<DBI> to execute SQL easily.
+This module have the following features.
+
 =over 4
 
-=item *
+=item * Execute INSERT, UPDATE, DELETE, SELECT statement easily
 
-There are many basic methods to execute various queries.
-C<insert()>, C<update()>, C<update_all()>,C<delete()>,
-C<delete_all()>, C<select()>,
-C<execute()>
+=item * You can specify bind values by hash reference
 
-=item *
+=item * Filtering by data type. and you can set filter to any column
 
-Filter when data is send or receive.
+=item * Creating where clause flexibly
 
-=item *
-
-Data filtering system
-
-=item *
-
-Model support.
-
-=item *
-
-Generate where clause dinamically.
-
-=item *
-
-Generate join clause dinamically.
+=item * Support model
 
 =back
 
@@ -1810,11 +1785,11 @@ L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki>
     my $connector = $dbi->connector;
     $dbi = $dbi->connector(DBIx::Connector->new(...));
 
-Connection manager object. if connector is set, you can get C<dbh()>
-from connection manager. conection manager object must have dbh() mehtod.
+Connection manager object. if connector is set, you can get C<dbh>
+through connection manager. conection manager object must have C<dbh> mehtod.
 
 This is L<DBIx::Connector> example. Please pass
-C<default_dbi_option> to L<DBIx::Connector>.
+C<default_dbi_option> to L<DBIx::Connector> C<new> method.
 
     my $connector = DBIx::Connector->new(
         "dbi:mysql:database=$DATABASE",
@@ -1823,21 +1798,21 @@ C<default_dbi_option> to L<DBIx::Connector>.
         DBIx::Custom->new->default_dbi_option
     );
     
-    my $dbi = DBIx::Custom->new(connector => $connector);
+    my $dbi = DBIx::Custom->connect(connector => $connector);
 
 =head2 C<dsn>
 
     my $dsn = $dbi->dsn;
     $dbi = $dbi->dsn("DBI:mysql:database=dbname");
 
-Data source name, used when C<connect()> is executed.
+Data source name, used when C<connect> method is executed.
 
 =head2 C<dbi_option>
 
     my $dbi_option = $dbi->dbi_option;
     $dbi = $dbi->dbi_option($dbi_option);
 
-L<DBI> option, used when C<connect()> is executed.
+L<DBI> option, used when C<connect> method is executed.
 Each value in option override the value of C<default_dbi_option>.
 
 =head2 C<default_dbi_option>
@@ -1845,7 +1820,7 @@ Each value in option override the value of C<default_dbi_option>.
     my $default_dbi_option = $dbi->default_dbi_option;
     $dbi = $dbi->default_dbi_option($default_dbi_option);
 
-L<DBI> default option, used when C<connect()> is executed,
+L<DBI> default option, used when C<connect> method is executed,
 default to the following values.
 
     {
@@ -1854,29 +1829,26 @@ default to the following values.
         AutoCommit => 1,
     }
 
-You should not change C<AutoCommit> value directly,
-the value is used to check if the process is in transaction.
-
 =head2 C<filters>
 
     my $filters = $dbi->filters;
     $dbi = $dbi->filters(\%filters);
 
-Filters, registered by C<register_filter()>.
+Filters, registered by C<register_filter> method.
 
 =head2 C<models>
 
     my $models = $dbi->models;
     $dbi = $dbi->models(\%models);
 
-Models, included by C<include_model()>.
+Models, included by C<include_model> method.
 
 =head2 C<password>
 
     my $password = $dbi->password;
     $dbi = $dbi->password('lkj&le`@s');
 
-Password, used when C<connect()> is executed.
+Password, used when C<connect> method is executed.
 
 =head2 C<query_builder>
 
@@ -1914,7 +1886,7 @@ Note that you don't have to specify like '[\w]'.
     my $user = $dbi->user;
     $dbi = $dbi->user('Ken');
 
-User name, used when C<connect()> is executed.
+User name, used when C<connect> method is executed.
 
 =head1 METHODS
 
@@ -1927,14 +1899,14 @@ and implements the following new ones.
     print $dbi->available_data_type;
 
 Get available data types. You can use these data types
-in C<type rule>'s C<from> section.
+in C<type rule>'s C<from1> and C<from2> section.
 
 =head2 C<available_type_name> EXPERIMENTAL
 
     print $dbi->available_type_name;
 
 Get available type names. You can use these type names in
-C<type_rule>'s C<into> section.
+C<type_rule>'s C<into1> and C<into2> section.
 
 =head2 C<assign_param> EXPERIMENTAL
 
@@ -1992,40 +1964,19 @@ and C<PrintError> option is false by default.
         join => [
             'inner join company on book.comparny_id = company.id'
         ],
-        filter => {
-            publish_date => {
-                out => 'tp_to_date',
-                in => 'date_to_tp',
-                end => 'tp_to_displaydate'
-            }
-        }
     );
 
 Create L<DBIx::Custom::Model> object and initialize model.
-the module is also used from model() method.
+the module is also used from C<model> method.
 
    $dbi->model('book')->select(...);
-
-=head2 C<create_query>
-    
-    my $query = $dbi->create_query(
-        "insert into book {insert_param title author};";
-    );
-
-Create L<DBIx::Custom::Query> object.
-
-If you want to get high performance,
-create L<DBIx::Custom::Query> object and execute the query by C<execute()>
-instead of other methods, such as C<insert>, C<update>.
-
-    $dbi->execute($query, {author => 'Ken', title => '%Perl%'});
 
 =head2 C<dbh>
 
     my $dbh = $dbi->dbh;
 
 Get L<DBI> database handle. if C<connector> is set, you can get
-database handle from C<connector>.
+database handle through C<connector> object.
 
 =head2 C<each_column>
 
@@ -2049,13 +2000,20 @@ column name and column information.
 =head2 C<execute>
 
     my $result = $dbi->execute(
-        "select * from book where title = :title and author like :author",
-        {title => 'Perl', author => '%Ken%'}
+      "select * from book where title = :title and author like :author",
+      {title => 'Perl', author => '%Ken%'}
     );
 
-Execute SQL. SQL can contain parameter such as :author.
-Return value is L<DBIx::Custom::Result> when select statement is executed,
-or the count of affected rows in insert, update, delete statement is executed.
+    my $result = $dbi->execute(
+      "select * from book where title = :book.title and author like :book.author",
+      {'book.title' => 'Perl', 'book.author' => '%Ken%'}
+    );
+
+Execute SQL. SQL can contain column parameter such as :author and :title.
+You can append table name to column name such as :book.title and :book.author.
+Second argunet is data, embedded into column parameter.
+Return value is L<DBIx::Custom::Result> object when select statement is executed,
+or the count of affected rows when insert, update, delete statement is executed.
 
 Parameter is replaced by placeholder C<?>.
 
@@ -2084,7 +2042,7 @@ The following opitons are available.
     ]
 
 Filter. You can set subroutine or filter name
-registered by by C<register_filter()>.
+registered by by C<register_filter>.
 This filter is executed before data is saved into database.
 and before type rule filter is executed.
 
@@ -2093,30 +2051,37 @@ and before type rule filter is executed.
     query => 1
 
 C<execute> method return L<DBIx::Custom::Query> object, not executing SQL.
+You can check executed SQL and columns order.
+
+    my $sql = $query->sql;
+    my $columns = $query->columns;
 
 =item C<table>
     
     table => 'author'
-    table => ['author', 'book']
 
-Table names for filtering.
+If you want to omit table name in column name
+and enable C<into1> and C<into2> type filter,
+You must set C<table> option.
 
-Filtering by C<apply_filter> is off in C<execute> method,
-because we don't know what filter is applied.
+    $dbi->execute("select * from book where title = :title and author = :author",
+        {title => 'Perl', author => 'Ken', table => 'book');
 
-=item C<type>
+    # Same
+    $dbi->execute(
+      "select * from book where title = :book.title and author = :book.author",
+      {title => 'Perl', author => 'Ken');
 
-Specify database data type.
+=item C<bind_type>
 
-    type => [image => DBI::SQL_BLOB]
-    type => [[qw/image audio/] => DBI::SQL_BLOB]
+Specify database bind data type.
 
-This is used to bind parameter by C<bind_param()> of statment handle.
+    bind_type => [image => DBI::SQL_BLOB]
+    bind_type => [[qw/image audio/] => DBI::SQL_BLOB]
+
+This is used to bind parameter by C<bind_param> of statment handle.
 
     $sth->bind_param($pos, $value, DBI::SQL_BLOB);
-
-C<type> option is also available
-by C<insert()>, C<update()>, C<delete()>, C<select()>.
 
 =item C<type_rule_off> EXPERIMENTAL
 
@@ -2174,6 +2139,14 @@ The above is same as the followin one.
 
     $dbi->delete(where => {id1 => 4, id2 => 5}, table => 'book');
 
+=item C<prefix> EXPERIMENTAL
+
+    prefix => 'some'
+
+prefix before table name section.
+
+    delete some from book
+
 =item C<query>
 
 Same as C<execute> method's C<query> option.
@@ -2181,6 +2154,8 @@ Same as C<execute> method's C<query> option.
 =item C<table>
 
     table => 'book'
+
+Table name.
 
 =item C<where>
 
@@ -2190,9 +2165,9 @@ Same as C<select> method's C<where> option.
 
 See C<id> option.
 
-=item C<type>
+=item C<bind_type>
 
-Same as C<execute> method's C<type> option.
+Same as C<execute> method's C<bind_type> option.
 
 =item C<type_rule_off> EXPERIMENTAL
 
@@ -2217,13 +2192,14 @@ Same as C<execute> method's C<type_rule2_off> option.
     $dbi->delete_all(table => $table);
 
 Execute delete statement for all rows.
-Options is same as C<delete()>.
+Options is same as C<delete>.
 
 =head2 C<insert>
 
     $dbi->insert({title => 'Perl', author => 'Ken'}, table  => 'book');
 
-Execute insert statement.
+Execute insert statement. First argument is row data. Return value is
+affected row count.
 
 The following opitons are available.
 
@@ -2259,23 +2235,20 @@ The above is same as the followin one.
         table => 'book'
     );
 
+=item C<prefix> EXPERIMENTAL
+
+    prefix => 'or replace'
+
+prefix before table name section
+
+    insert or replace into book
+
 =item C<primary_key>
 
     primary_key => 'id'
     primary_key => ['id1', 'id2']
 
 Primary key. This is used by C<id> option.
-
-=item C<param>
-
-    param => {title => 'Perl', author => 'Ken'}
-
-Insert data.
-
-If C<insert> method's arguments is odd numbers,
-first argument is received as C<param>.
-
-    $dbi->insert({title => 'Perl', author => 'Ken'}, table => 'book');
 
 =item C<query>
 
@@ -2287,9 +2260,9 @@ Same as C<execute> method's C<query> option.
 
 Table name.
 
-=item C<type>
+=item C<bind_type>
 
-Same as C<execute> method's C<type> option.
+Same as C<execute> method's C<bind_type> option.
 
 =item C<type_rule_off> EXPERIMENTAL
 
@@ -2335,8 +2308,7 @@ Name space module, extending L<DBIx::Custom::Model>.
 B<MyModel.pm>
 
     package MyModel;
-    
-    use base 'DBIx::Custom::Model';
+    use DBIx::Custom::Model -base;
     
     1;
 
@@ -2345,24 +2317,22 @@ Model modules, extending name space module.
 B<MyModel/book.pm>
 
     package MyModel::book;
-    
-    use base 'MyModel';
+    use MyModel -base;
     
     1;
 
 B<MyModel/company.pm>
 
     package MyModel::company;
-    
-    use base 'MyModel';
+    use MyModel -base;
     
     1;
     
-MyModel::book and MyModel::company is included by C<include_model()>.
+MyModel::book and MyModel::company is included by C<include_model>.
 
-You can get model object by C<model()>.
+You can get model object by C<model>.
 
-    my $book_model    = $dbi->model('book');
+    my $book_model = $dbi->model('book');
     my $company_model = $dbi->model('company');
 
 See L<DBIx::Custom::Model> to know model features.
@@ -2372,8 +2342,6 @@ See L<DBIx::Custom::Model> to know model features.
     my $param = $dbi->merge_param({key1 => 1}, {key1 => 1, key2 => 2});
 
 Merge parameters.
-
-$param:
 
     {key1 => [1, 1], key2 => 2}
 
@@ -2399,14 +2367,9 @@ Register method. These method is called directly from L<DBIx::Custom> object.
 
 =head2 C<model>
 
-    $dbi->model('book')->method(
-        insert => sub { ... },
-        update => sub { ... }
-    );
-    
     my $model = $dbi->model('book');
 
-Set and get a L<DBIx::Custom::Model> object,
+Get a L<DBIx::Custom::Model> object,
 
 =head2 C<mycolumn>
 
@@ -2484,10 +2447,10 @@ In C<into1> and C<into2> you can specify
 type name as same as type name defined
 by create table, such as C<DATETIME> or C<DATE>.
 
-C<into2> is executed after C<into1>.
-
 Note that type name and data type don't contain upper case.
 If these contain upper case charactor, you convert it to lower case.
+
+C<into2> is executed after C<into1>.
 
 Type rule of C<into1> and C<into2> is enabled on the following
 column name.
@@ -2498,6 +2461,8 @@ column name.
 
     issue_date
     issue_datetime
+
+This need C<table> option in each method.
 
 =item 2. table name and column name, separator is dot
 
@@ -2510,7 +2475,7 @@ You get all type name used in database by C<available_type_name>.
 
     print $dbi->available_type_name;
 
-In C<from1> and C<from2> you data type, not type name.
+In C<from1> and C<from2> you specify data type, not type name.
 C<from2> is executed after C<from1>.
 You get all data type by C<available_data_type>.
 
@@ -2555,21 +2520,21 @@ if C<column> is not specified, '*' is set.
 
     column => '*'
 
-You can specify hash reference in array reference. This is EXPERIMENTAL.
+You can specify hash of array reference. This is EXPERIMENTAL.
 
     column => [
         {book => [qw/author title/]},
         {person => [qw/name age/]}
     ]
 
-This is expanded to the following one by using C<col> method.
+This is expanded to the following one by using C<colomn> method.
 
     book.author as "book.author",
     book.title as "book.title",
     person.name as "person.name",
     person.age as "person.age"
 
-You can specify array reference in array reference.
+You can specify array of array reference.
 
     column => [
         ['date(book.register_datetime)', as => 'book.register_date']
@@ -2663,7 +2628,7 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
-=item C<type>
+=item C<bind_type>
 
 Same as C<execute> method's C<type> option.
 
@@ -2699,10 +2664,21 @@ Same as C<execute> method's C<type_rule2_off> option.
         clause => ['and', 'author = :author', 'title like :title'],
         param  => {author => 'Ken', title => '%Perl%'}
     );
-
-    # String(with where_param option)
-    where => 'title like :title',
-    where_param => {title => '%Perl%'}
+    
+    # Array reference 1 (array reference, hash referenc). same as above
+    where => [
+        ['and', 'author = :author', 'title like :title'],
+        {author => 'Ken', title => '%Perl%'}
+    ];    
+    
+    # Array reference 2 (String, hash reference)
+    where => [
+        'title like :title',
+        {title => '%Perl%'}
+    ]
+    
+    # String
+    where => 'title is null'
 
 Where clause.
     
@@ -2720,7 +2696,7 @@ This option is for Oracle and SQL Server paging process.
 
     $dbi->update({title => 'Perl'}, table  => 'book', where  => {id => 4});
 
-Execute update statement.
+Execute update statement. First argument is update data.
 
 The following opitons are available.
 
@@ -2757,15 +2733,13 @@ The above is same as the followin one.
         table => 'book'
     );
 
-=item C<param>
+=item C<prefix> EXPERIMENTAL
 
-    param => {title => 'Perl'}
+    prefix => 'or replace'
 
-Update data.
+prefix before table name section
 
-If C<update> method's arguments is odd numbers, first argument is received as C<param>.
-
-    $dbi->update({title => 'Perl'}, table => 'book', where => {id => 2});
+    update or replace book
 
 =item C<primary_key>
 
@@ -2788,7 +2762,7 @@ Table name.
 
 Same as C<select> method's C<where> option.
 
-=item C<type>
+=item C<bind_type>
 
 Same as C<execute> method's C<type> option.
 
@@ -2812,10 +2786,10 @@ Same as C<execute> method's C<type_rule2_off> option.
 
 =head2 C<update_all>
 
-    $dbi->update_all(table => 'book', param => {title => 'Perl'});
+    $dbi->update_all({title => 'Perl'}, table => 'book', );
 
 Execute update statement for all rows.
-Options is same as C<update()>.
+Options is same as C<update> method.
 
 =head2 C<update_param>
 
@@ -2840,17 +2814,6 @@ Create a new L<DBIx::Custom::Where> object.
 
 Setup all model objects.
 C<columns> of model object is automatically set, parsing database information.
-
-=head1 Parameter
-
-Parameter start at ':'. This is replaced to place holoder
-
-    $dbi->execute(
-        "select * from book where title = :title and author = :author"
-        param => {title => 'Perl', author => 'Ken'}
-    );
-
-    "select * from book where title = ? and author = ?"
 
 =head1 ENVIRONMENT VARIABLE
 
