@@ -1342,6 +1342,30 @@ is_deeply($row, [{key1 => 1, key2 => 2}, {key1 => 3, key2 => 4}], 'not_exists');
 eval {$dbi->where(ppp => 1) };
 like($@, qr/invalid/);
 
+$where = $dbi->where(
+    clause => ['and', ['or'], ['and', 'key1 = :key1', 'key2 = :key2']],
+    param => {key1 => 1, key2 => 2}
+);
+$result = $dbi->select(
+    table => 'table1',
+    where => $where,
+);
+$row = $result->all;
+is_deeply($row, [{key1 => 1, key2 => 2}]);
+
+
+$where = $dbi->where(
+    clause => ['and', ['or'], ['or', ':key1', ':key2']],
+    param => {}
+);
+$result = $dbi->select(
+    table => 'table1',
+    where => $where,
+);
+$row = $result->all;
+is_deeply($row, [{key1 => 1, key2 => 2}, {key1 => 3, key2 => 4}]);
+
+
 test 'dbi_option default';
 $dbi = DBIx::Custom->new;
 is_deeply($dbi->dbi_option, {});
@@ -3247,5 +3271,19 @@ $param = $dbi->map_param(
     price => ['book.price', sub { '%' . $_[0] }, {if => 'exists'}]
 );
 is_deeply($param, {'book.price' => '%a'});
+
+
+test 'table_alias';
+$dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
+$dbi->execute("create table table1 (key1 Date, key2 datetime)");
+$dbi->type_rule(
+    into1 => {
+        date => sub { uc $_[0] }
+    }
+);
+$dbi->execute("insert into table1 (key1) values (:table2.key1)", {'table2.key1' => 'a'},
+  table_alias => {table2 => 'table1'});
+$result = $dbi->select(table => 'table1');
+is($result->one->{key1}, 'A');
 
 =cut
