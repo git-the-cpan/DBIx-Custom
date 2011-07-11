@@ -1,6 +1,7 @@
 Changes
 lib/DBIx/Custom.pm
 lib/DBIx/Custom/Guide.pod
+lib/DBIx/Custom/Guide/Ja.pod
 lib/DBIx/Custom/Model.pm
 lib/DBIx/Custom/Order.pm
 lib/DBIx/Custom/Query.pm

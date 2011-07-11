@@ -350,7 +350,7 @@ is_deeply($rows, [{key1 => 1, key2 => 22, key3 => 3, key4 => 4, key5 => 5},
 
 $result = $dbi->update(table => 'table1', param => {key2 => 11}, where => {key1 => 1}, append => '   ');
 
-eval{$dbi->update(table => 'table1', noexist => 1)};
+eval{$dbi->update(table => 'table1', where => {key1 => 1}, noexist => 1)};
 like($@, qr/noexist/, "invalid");
 
 eval{$dbi->update(table => 'table1')};
@@ -483,7 +483,7 @@ $dbi->delete(table => 'table1', where => {key1 => 1, key2 => 2});
 $rows = $dbi->select(table => 'table1')->all;
 is_deeply($rows, [{key1 => 3, key2 => 4}], "delete multi key");
 
-eval{$dbi->delete(table => 'table1', noexist => 1)};
+eval{$dbi->delete(table => 'table1', where => {key1 => 1}, noexist => 1)};
 like($@, qr/noexist/, "invalid");
 
 $dbi = DBIx::Custom->connect($NEW_ARGS->{0});
@@ -904,6 +904,27 @@ is_deeply($infos,
         ['table2', 'key3', 'key3']
     ]
     
+);
+test 'each_table';
+$dbi = DBIx::Custom->connect($NEW_ARGS->{0});
+$dbi->execute($CREATE_TABLE->{2});
+$dbi->execute($CREATE_TABLE->{3});
+
+$infos = [];
+$dbi->each_table(sub {
+    my ($self, $table, $table_info) = @_;
+    
+    if ($table =~ /^table/) {
+         my $info = [$table, $table_info->{TABLE_NAME}];
+         push @$infos, $info;
+    }
+});
+$infos = [sort { $a->[0] cmp $b->[0] || $a->[1] cmp $b->[1] } @$infos];
+is_deeply($infos, 
+    [
+        ['table1', 'table1'],
+        ['table2', 'table2'],
+    ]
 );
 
 test 'limit';
@@ -2190,14 +2211,14 @@ $result = $model->select_at(
 is_deeply($result->one,
           {key1 => 1, 'table2.key1' => 1});
 
-eval{
-    $result = $model->select_at(
-        column => [
-            ['table2.key1', asaaaa => 'table2.key1']
-        ]
-    );
-};
-like($@, qr/COLUMN/);
+$result = $model->select_at(
+    column => [
+        $model->mycolumn(['key1']),
+        ['table2.key1' => 'table2.key1']
+    ]
+);
+is_deeply($result->one,
+          {key1 => 1, 'table2.key1' => 1});
 
 test 'dbi method from model';
 {
@@ -3304,6 +3325,16 @@ $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
     $result = $dbi->select(table => 'table1', append => "$order");
     is_deeply($result->all, [{key1 => 2, key2 => 4}, {key1 => 2, key2 => 2},
       {key1 => 1, key2 => 3}, {key1 => 1, key2 => 1}]);
+
+    $order = $dbi->order;
+    $order->prepend(['table1-key1'], [qw/table1-key2 desc/]);
+    $result = $dbi->select(table => 'table1',
+      column => [[key1 => 'table1-key1'], [key2 => 'table1-key2']],
+      append => "$order");
+    is_deeply($result->all, [{'table1-key1' => 1, 'table1-key2' => 3},
+      {'table1-key1' => 1, 'table1-key2' => 1},
+      {'table1-key1' => 2, 'table1-key2' => 4},
+      {'table1-key1' => 2, 'table1-key2' => 2}]);
 }
 
 test 'tag_parse';
@@ -3314,6 +3345,28 @@ $dbi->tag_parse(0);
     $dbi->insert({key1 => 1, key2 => 1}, table => 'table1');
     eval {$dbi->execute("select * from table1 where {= key1}", {key1 => 1})};
     ok($@);
+}
+
+test 'last_sql';
+{
+    my $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
+    $dbi->execute("create table table1 (key1, key2)");
+    $dbi->execute('select * from table1');
+    is($dbi->last_sql, 'select * from table1;');
+    
+    eval{$dbi->execute("aaa")};
+    is($dbi->last_sql, 'aaa;');
+    
+}
+
+test 'DBIx::Custom header';
+{
+    my $dbi = DBIx::Custom->connect(dsn => 'dbi:SQLite:dbname=:memory:');
+    $dbi->execute("create table table1 (key1, key2)");
+    my $result = $dbi->execute('select key1 as h1, key2 as h2 from table1');
+    
+    is_deeply($result->header, [qw/h1 h2/]);
+    
 }
 
 =cut

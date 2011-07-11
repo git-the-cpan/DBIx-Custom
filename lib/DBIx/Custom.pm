@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1700';
+our $VERSION = '0.1701';
 use 5.008001;
 
 use Carp 'croak';
@@ -18,9 +18,6 @@ use Encode qw/encode encode_utf8 decode_utf8/;
 
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
-
-our @COMMON_ARGS = qw/bind_type table query filter id primary_key
-  type_rule_off type_rule1_off type_rule2_off type table_alias/;
 
 has [qw/connector dsn password quote user/],
     cache => 0,
@@ -52,6 +49,7 @@ has [qw/connector dsn password quote user/],
             decode_utf8 => sub { decode_utf8($_[0]) }
         }
     },
+    last_sql => '',
     models => sub { {} },
     query_builder => sub { DBIx::Custom::QueryBuilder->new },
     result_class  => 'DBIx::Custom::Result',
@@ -169,18 +167,9 @@ sub dbh {
     }
 }
 
-our %DELETE_ARGS = map { $_ => 1 } @COMMON_ARGS,
-  qw/where append allow_delete_all where_param prefix/;
-
 sub delete {
     my ($self, %args) = @_;
 
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $DELETE_ARGS{$name};
-    }
-    
     # Arguments
     my $table = $args{table} || '';
     croak qq{"table" option must be specified. } . _subname
@@ -283,7 +272,23 @@ sub each_column {
     }
 }
 
-our %EXECUTE_ARGS = map { $_ => 1 } @COMMON_ARGS, 'param';
+sub each_table {
+    my ($self, $cb) = @_;
+    
+    # Iterate all tables
+    my $sth_tables = $self->dbh->table_info;
+    while (my $table_info = $sth_tables->fetchrow_hashref) {
+        
+        # Table
+        my $table = $table_info->{TABLE_NAME};
+        $self->$cb($table, $table_info);
+    }
+}
+
+our %VALID_ARGS = map { $_ => 1 } qw/append allow_delete_all
+  allow_update_all bind_type column filter id join param prefix primary_key
+  query relation table table_alias type type_rule_off type_rule1_off
+  type_rule2_off wrap/;
 
 sub execute {
     my $self = shift;
@@ -312,11 +317,15 @@ sub execute {
     # Check argument names
     foreach my $name (keys %args) {
         croak qq{"$name" is wrong option } . _subname
-          unless $EXECUTE_ARGS{$name};
+          unless $VALID_ARGS{$name};
     }
     
     # Create query
     $query = $self->_create_query($query) unless ref $query;
+    
+    # Save query
+    $self->last_sql($query->sql);
+
     return $query if $query_return;
     $filter ||= $query->filter;
     
@@ -463,8 +472,6 @@ sub execute {
     else { return $affected }
 }
 
-our %INSERT_ARGS = map { $_ => 1 } @COMMON_ARGS, qw/param/;
-
 sub insert {
     my $self = shift;
     
@@ -474,7 +481,7 @@ sub insert {
     my %args = @_;
     my $table  = delete $args{table};
     croak qq{"table" option must be specified } . _subname
-      unless $table;
+      unless defined $table;
     my $p = delete $args{param} || {};
     $param  ||= $p;
     my $append = delete $args{append} || '';
@@ -485,12 +492,6 @@ sub insert {
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
     my $prefix = delete $args{prefix};
-
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $INSERT_ARGS{$name};
-    }
 
     # Merge parameter
     if (defined $id) {
@@ -736,7 +737,7 @@ sub not_exists { bless {}, 'DBIx::Custom::NotExists' }
 
 sub order {
     my $self = shift;
-    return DBIx::Custom::Order->new(@_);
+    return DBIx::Custom::Order->new(quote => $self->quote, @_);
 }
 
 sub register_filter {
@@ -748,9 +749,6 @@ sub register_filter {
     
     return $self;
 }
-
-our %SELECT_ARGS = map { $_ => 1 } @COMMON_ARGS,
-  qw/column where relation join param where_param wrap prefix/;
 
 sub select {
     my ($self, %args) = @_;
@@ -782,12 +780,6 @@ sub select {
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
     my $prefix = delete $args{prefix};
     
-    # Check arguments
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $SELECT_ARGS{$name};
-    }
-    
     # Add relation tables(DEPRECATED!);
     $self->_add_relation_table($tables, $relation);
     
@@ -809,9 +801,12 @@ sub select {
                 $column = $self->column(%$column) if ref $column eq 'HASH';
             }
             elsif (ref $column eq 'ARRAY') {
-                croak "Format must be [COLUMN, as => ALIAS] " . _subname
-                  unless @$column == 3 && $column->[1] eq 'as';
-                $column = join(' ', $column->[0], 'as', $q . $column->[2] . $q);
+                if (@$column == 3 && $column->[1] eq 'as') {
+                    warn "[COLUMN, as => ALIAS] is DEPRECATED! use [COLUMN => ALIAS]";
+                    splice @$column, 1, 1;
+                }
+                
+                $column = join(' ', $column->[0], 'as', $q . $column->[1] . $q);
             }
             unshift @$tables, @{$self->_search_tables($column)};
             push @sql, ($column, ',');
@@ -1013,9 +1008,6 @@ sub type_rule {
     return $self->{type_rule} || {};
 }
 
-our %UPDATE_ARGS = map { $_ => 1 } @COMMON_ARGS,
-  qw/param where allow_update_all where_param prefix/;
-
 sub update {
     my $self = shift;
 
@@ -1039,12 +1031,6 @@ sub update {
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
     my $prefix = delete $args{prefix};
-    
-    # Check argument names
-    foreach my $name (keys %args) {
-        croak qq{"$name" is wrong option } . _subname
-          unless $UPDATE_ARGS{$name};
-    }
 
     # Update clause
     my $update_clause = $self->update_param($param);
@@ -1157,6 +1143,9 @@ sub _create_query {
             }
         ) if $cache;
     }
+    
+    # Save sql
+    $self->last_sql($query->sql);
     
     # Prepare statement handle
     my $sth;
@@ -1512,7 +1501,7 @@ sub apply_filter {
 }
 
 # DEPRECATED!
-our %SELECT_AT_ARGS = (%SELECT_ARGS, where => 1, primary_key => 1);
+our %SELECT_AT_ARGS = (%VALID_ARGS, where => 1, primary_key => 1);
 sub select_at {
     my ($self, %args) = @_;
 
@@ -1542,7 +1531,7 @@ sub select_at {
 }
 
 # DEPRECATED!
-our %DELETE_AT_ARGS = (%DELETE_ARGS, where => 1, primary_key => 1);
+our %DELETE_AT_ARGS = (%VALID_ARGS, where => 1, primary_key => 1);
 sub delete_at {
     my ($self, %args) = @_;
 
@@ -1566,7 +1555,7 @@ sub delete_at {
 }
 
 # DEPRECATED!
-our %UPDATE_AT_ARGS = (%UPDATE_ARGS, where => 1, primary_key => 1);
+our %UPDATE_AT_ARGS = (%VALID_ARGS, where => 1, primary_key => 1);
 sub update_at {
     my $self = shift;
 
@@ -1595,7 +1584,7 @@ sub update_at {
 }
 
 # DEPRECATED!
-our %INSERT_AT_ARGS = (%INSERT_ARGS, where => 1, primary_key => 1);
+our %INSERT_AT_ARGS = (%VALID_ARGS, where => 1, primary_key => 1);
 sub insert_at {
     my $self = shift;
     
@@ -1889,6 +1878,13 @@ default to the following values.
 
 Filters, registered by C<register_filter> method.
 
+=head2 C<last_sql> EXPERIMENTAL
+
+    my $last_sql = $dbi->last_sql;
+    $dbi = $dbi->last_sql($last_sql);
+
+Get last successed SQL executed by C<execute> method.
+
 =head2 C<models>
 
     my $models = $dbi->models;
@@ -2057,6 +2053,21 @@ Iterate all column informations of all table from database.
 Argument is callback when one column is found.
 Callback receive four arguments, dbi object, table name,
 column name and column information.
+
+=head2 C<each_table> EXPERIMENTAL
+
+    $dbi->each_table(
+        sub {
+            my ($dbi, $table, $table_info) = @_;
+            
+            my $table_name = $table_info->{TABLE_NAME};
+        }
+    );
+
+Iterate all table informationsfrom database.
+Argument is callback when one table is found.
+Callback receive three arguments, dbi object, table name,
+table information.
 
 =head2 C<execute>
 
@@ -2657,13 +2668,14 @@ This is expanded to the following one by using C<colomn> method.
     person.name as "person.name",
     person.age as "person.age"
 
-You can specify array of array reference.
+You can specify array of array reference, first argument is
+column name, second argument is alias.
 
     column => [
-        ['date(book.register_datetime)', as => 'book.register_date']
+        ['date(book.register_datetime)' => 'book.register_date']
     ];
 
-Alias is quoted and joined.
+Alias is quoted properly and joined.
 
     date(book.register_datetime) as "book.register_date"
 
@@ -2954,75 +2966,77 @@ DEBUG output encoding. Default to UTF-8.
 L<DBIx::Custom>
 
     # Attribute methods
-    data_source # Removed at 2017/1/1
-    dbi_options # Removed at 2017/1/1
-    filter_check # Removed at 2017/1/1
-    reserved_word_quote # Removed at 2017/1/1
-    cache_method # Removed at 2017/1/1
+    data_source # will be removed at 2017/1/1
+    dbi_options # will be removed at 2017/1/1
+    filter_check # will be removed at 2017/1/1
+    reserved_word_quote # will be removed at 2017/1/1
+    cache_method # will be removed at 2017/1/1
     
     # Methods
-    create_query # Removed at 2017/1/1
-    apply_filter # Removed at 2017/1/1
-    select_at # Removed at 2017/1/1
-    delete_at # Removed at 2017/1/1
-    update_at # Removed at 2017/1/1
-    insert_at # Removed at 2017/1/1
-    register_tag # Removed at 2017/1/1
-    default_bind_filter # Removed at 2017/1/1
-    default_fetch_filter # Removed at 2017/1/1
-    insert_param_tag # Removed at 2017/1/1
-    register_tag_processor # Removed at 2017/1/1
-    update_param_tag # Removed at 2017/1/1
+    create_query # will be removed at 2017/1/1
+    apply_filter # will be removed at 2017/1/1
+    select_at # will be removed at 2017/1/1
+    delete_at # will be removed at 2017/1/1
+    update_at # will be removed at 2017/1/1
+    insert_at # will be removed at 2017/1/1
+    register_tag # will be removed at 2017/1/1
+    default_bind_filter # will be removed at 2017/1/1
+    default_fetch_filter # will be removed at 2017/1/1
+    insert_param_tag # will be removed at 2017/1/1
+    register_tag_processor # will be removed at 2017/1/1
+    update_param_tag # will be removed at 2017/1/1
     
     # Options
-    select method relation option # Removed at 2017/1/1
-    select method param option # Removed at 2017/1/1
+    select method relation option # will be removed at 2017/1/1
+    select method param option # will be removed at 2017/1/1
+    select method column option [COLUMN, as => ALIAS] format
+      # will be removed at 2017/1/1
     
     # Others
     execute("select * from {= title}"); # execute tag parsing functionality
-                                        # Removed at 2017/1/1
-    Query caching # Removed at 2017/1/1
+                                        # will be removed at 2017/1/1
+    Query caching # will be removed at 2017/1/1
 
 L<DBIx::Custom::Model>
 
     # Attribute method
-    filter # Removed at 2017/1/1
-    name # Removed at 2017/1/1
-    type # Removed at 2017/1/1
+    filter # will be removed at 2017/1/1
+    name # will be removed at 2017/1/1
+    type # will be removed at 2017/1/1
 
 L<DBIx::Custom::Query>
     
     # Attribute method
-    default_filter # Removed at 2017/1/1
+    default_filter # will be removed at 2017/1/1
 
 L<DBIx::Custom::QueryBuilder>
     
     # Attribute method
-    tags # Removed at 2017/1/1
-    tag_processors # Removed at 2017/1/1
+    tags # will be removed at 2017/1/1
+    tag_processors # will be removed at 2017/1/1
     
     # Method
-    register_tag # Removed at 2017/1/1
-    register_tag_processor # Removed at 2017/1/1
+    register_tag # will be removed at 2017/1/1
+    register_tag_processor # will be removed at 2017/1/1
     
     # Others
     build_query("select * from {= title}"); # tag parsing functionality
-                                            # Removed at 2017/1/1
+                                            # will be removed at 2017/1/1
 
 L<DBIx::Custom::Result>
     
     # Attribute method
-    filter_check # Removed at 2017/1/1
+    filter_check # will be removed at 2017/1/1
     
     # Methods
-    end_filter # Removed at 2017/1/1
-    remove_end_filter # Removed at 2017/1/1
-    remove_filter # Removed at 2017/1/1
-    default_filter # Removed at 2017/1/1
+    end_filter # will be removed at 2017/1/1
+    remove_end_filter # will be removed at 2017/1/1
+    remove_filter # will be removed at 2017/1/1
+    default_filter # will be removed at 2017/1/1
 
 L<DBIx::Custom::Tag>
 
-    This module is DEPRECATED! # Removed at 2017/1/1
+    This module is DEPRECATED! # will be removed at 2017/1/1
 
 =head1 BACKWORD COMPATIBLE POLICY
 
@@ -3031,11 +3045,11 @@ except for attribute method.
 You can check all DEPRECATED functionalities by document.
 DEPRECATED functionality is removed after five years,
 but if at least one person use the functionality and tell me that thing
-I extend one year each time you tell me it.
+I extend one year each time he tell me it.
 
 EXPERIMENTAL functionality will be changed without warnings.
 
-This policy is changed at 2011/6/28
+This policy was changed at 2011/6/28
 
 =head1 BUGS
 

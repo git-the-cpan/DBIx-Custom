@@ -1,3 +1,11 @@
+0.1701
+    - added DBIx::Cusotm::Order prepend method automatically quoted syntax
+    - simplified arguments check
+    - added EXPERIMENTAL each_table method
+    - select method column option [COLUMN, as => ALIAS] format is DEPRECATED!
+      changed to [COLUMN => ALIAS]
+    - added EXPERIMENTAL DBIx::Custom::Result header method
+    - added EXPERIMENTAL last_sql attribute method
 0.1700
     - fixed end_filter DEPRECATED warnings bug
 0.1699
