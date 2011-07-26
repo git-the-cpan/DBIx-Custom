@@ -1,3 +1,6 @@
+0.1702
+    - removed EXPERIMENTAL status of some methods.
+    - fixed some join bug
 0.1701
     - added DBIx::Cusotm::Order prepend method automatically quoted syntax
     - simplified arguments check
