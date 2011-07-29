@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               DBIx-Custom
-version:            0.1703
+version:            0.1704
 abstract:           Execute insert, update, delete, and select statement easily
 author:
     - Yuki Kimoto <kimoto.yuki@gmail.com>

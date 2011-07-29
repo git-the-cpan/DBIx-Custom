@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1703';
+our $VERSION = '0.1704';
 use 5.008001;
 
 use Carp 'croak';
@@ -84,12 +84,11 @@ sub assign_param {
     # Create set tag
     my @params;
     my $safety = $self->safety_character;
-    my $q = $self->_quote;
     foreach my $column (keys %$param) {
         croak qq{"$column" is not safety column name } . _subname
           unless $column =~ /^[$safety\.]+$/;
-        my $column_quote = "$q$column$q";
-        $column_quote =~ s/\./$q.$q/;
+        my $column_quote = $self->_q($column);
+        $column_quote =~ s/\./$self->_q(".")/e;
         push @params, "$column_quote = :$column";
     }
     my $tag = join(', ', @params);
@@ -109,16 +108,14 @@ sub column {
         $columns ||= $self->model($real_table)->columns;
     }
     
-    # Reserved word quote
-    my $q = $self->_quote;
-    
     # Separator
     my $separator = $self->separator;
     
     # Column clause
     my @column;
     $columns ||= [];
-    push @column, "$q$table$q.$q$_$q as $q${table}${separator}$_$q"
+    push @column, $self->_q($table) . "." . $self->_q($_) .
+      " as " . $self->_q("${table}${separator}$_")
       for @$columns;
     
     return join (', ', @column);
@@ -208,10 +205,9 @@ sub delete {
 
     # Delete statement
     my @sql;
-    my $q = $self->_quote;
     push @sql, "delete";
     push @sql, $prefix if defined $prefix;
-    push @sql, "from $q$table$q $where_clause";
+    push @sql, "from " . $self->_q($table) . " $where_clause";
     push @sql, $append if defined $append;
     my $sql = join(' ', @sql);
     
@@ -334,7 +330,8 @@ sub execute {
     my $main_table = pop @$tables;
     $tables = $self->_remove_duplicate_table($tables, $main_table);
     if (my $q = $self->_quote) {
-        $_ =~ s/$q//g for @$tables;
+        $q = quotemeta($q);
+        $_ =~ s/[$q]//g for @$tables;
     }
     
     # Type rule
@@ -499,14 +496,11 @@ sub insert {
         $param = $self->merge_param($id_param, $param);
     }
 
-    # Reserved word quote
-    my $q = $self->_quote;
-    
     # Insert statement
     my @sql;
     push @sql, "insert";
     push @sql, $prefix if defined $prefix;
-    push @sql, "into $q$table$q " . $self->insert_param($param);
+    push @sql, "into " . $self->_q($table) . " " . $self->insert_param($param);
     push @sql, $append if defined $append;
     my $sql = join (' ', @sql);
     
@@ -519,14 +513,13 @@ sub insert_param {
     
     # Create insert parameter tag
     my $safety = $self->safety_character;
-    my $q = $self->_quote;
     my @columns;
     my @placeholders;
     foreach my $column (keys %$param) {
         croak qq{"$column" is not safety column name } . _subname
           unless $column =~ /^[$safety\.]+$/;
-        my $column_quote = "$q$column$q";
-        $column_quote =~ s/\./$q.$q/;
+        my $column_quote = $self->_q($column);
+        $column_quote =~ s/\./$self->_q(".")/e;
         push @columns, $column_quote;
         push @placeholders, ":$column";
     }
@@ -698,9 +691,10 @@ sub mycolumn {
     
     # Create column clause
     my @column;
-    my $q = $self->_quote;
     $columns ||= [];
-    push @column, "$q$table$q.$q$_$q as $q$_$q" for @$columns;
+    push @column, $self->_q($table) . "." . $self->_q($_) .
+      " as " . $self->_q($_)
+      for @$columns;
     
     return join (', ', @column);
 }
@@ -737,7 +731,7 @@ sub not_exists { bless {}, 'DBIx::Custom::NotExists' }
 
 sub order {
     my $self = shift;
-    return DBIx::Custom::Order->new(quote => $self->quote, @_);
+    return DBIx::Custom::Order->new(dbi => $self, @_);
 }
 
 sub register_filter {
@@ -787,9 +781,6 @@ sub select {
     my @sql;
     push @sql, 'select';
     
-    # Reserved word quote
-    my $q = $self->_quote;
-    
     # Prefix
     push @sql, $prefix if defined $prefix;
     
@@ -806,7 +797,7 @@ sub select {
                     splice @$column, 1, 1;
                 }
                 
-                $column = join(' ', $column->[0], 'as', $q . $column->[1] . $q);
+                $column = join(' ', $column->[0], 'as', $self->_q($column->[1]));
             }
             unshift @$tables, @{$self->_search_tables($column)};
             push @sql, ($column, ',');
@@ -820,13 +811,13 @@ sub select {
     if ($relation) {
         my $found = {};
         foreach my $table (@$tables) {
-            push @sql, ("$q$table$q", ',') unless $found->{$table};
+            push @sql, ($self->_q($table), ',') unless $found->{$table};
             $found->{$table} = 1;
         }
     }
     else {
         my $main_table = $tables->[-1] || '';
-        push @sql, "$q$main_table$q";
+        push @sql, $self->_q($main_table);
     }
     pop @sql if ($sql[-1] || '') eq ',';
     croak "Not found table name " . _subname
@@ -1060,10 +1051,9 @@ sub update {
     
     # Update statement
     my @sql;
-    my $q = $self->_quote;
     push @sql, "update";
     push @sql, $prefix if defined $prefix;
-    push @sql, "$q$table$q $update_clause $where_clause";
+    push @sql, $self->_q($table) . " $update_clause $where_clause";
     push @sql, $append if defined $append;
     
     # SQL
@@ -1126,11 +1116,13 @@ sub _create_query {
         # Create query
         my $builder = $self->query_builder;
         $builder->{_tag_parse} = $self->tag_parse;
+        $builder->safety_character($self->safety_character);
         $query = $builder->build_query($source);
 
         # Remove reserved word quote
         if (my $q = $self->_quote) {
-            $_ =~ s/$q//g for @{$query->columns}
+            $q = quotemeta($q);
+            $_ =~ s/[$q]//g for @{$query->columns}
         }
 
         # Save query to cache
@@ -1335,7 +1327,7 @@ sub _push_join {
             my $j_clause = (split /\s+on\s+/, $join_clause)[-1];
             $j_clause =~ s/'.+?'//g;
             my $q_re = quotemeta($q);
-            $j_clause =~ s/$q_re//g;
+            $j_clause =~ s/[$q_re]//g;
             my $c = $self->safety_character;
             my $join_re = qr/(?:^|\s)($c+)\.$c+\s+=\s+($c+)\.$c+/;
             if ($j_clause =~ $join_re) {
@@ -1374,6 +1366,20 @@ sub _quote {
          : '';
 }
 
+sub _q {
+    my ($self, $value) = @_;
+    
+    my $quote = $self->_quote;
+    my $q = substr($quote, 0, 1) || '';
+    my $p;
+    if (defined $quote && length $quote > 1) {
+        $p = substr($quote, 1, 1);
+    }
+    else { $p = $q }
+    
+    return "$q$value$p";
+}
+
 sub _remove_duplicate_table {
     my ($self, $tables, $main_table) = @_;
     
@@ -1392,7 +1398,8 @@ sub _search_tables {
     my $safety_character = $self->safety_character;
     my $q = $self->_quote;
     my $q_re = quotemeta($q);
-    my $table_re = $q ? qr/(?:^|[^$safety_character])$q_re?([$safety_character]+)$q_re?\./
+    my $quoted_safety_character_re = $self->_q("?([$safety_character]+)");
+    my $table_re = $q ? qr/(?:^|[^$safety_character])$quoted_safety_character_re?\./
                       : qr/(?:^|[^$safety_character])([$safety_character]+)\./;
     while ($source =~ /$table_re/g) {
         push @$tables, $1;
@@ -1411,8 +1418,8 @@ sub _where_to_obj {
         my $clause = ['and'];
         my $q = $self->_quote;
         foreach my $column (keys %$where) {
-            my $column_quote = "$q$column$q";
-            $column_quote =~ s/\./$q.$q/;
+            my $column_quote = $self->_q($column);
+            $column_quote =~ s/\./$self->_q(".")/e;
             push @$clause, "$column_quote = :$column" for keys %$where;
         }
         $obj = $self->where(clause => $clause, param => $where);
@@ -1814,34 +1821,56 @@ DBIx::Custom - Execute insert, update, delete, and select statement easily
     
 =head1 DESCRIPTIONS
 
-L<DBIx::Custom> is L<DBI> wrapper module.
-
-=head1 FEATURES
-
-L<DBIx::Custom> is the wrapper class of L<DBI> to execute SQL easily.
+L<DBIx::Custom> is L<DBI> wrapper module to execute SQL easily.
 This module have the following features.
 
 =over 4
 
-=item * Execute INSERT, UPDATE, DELETE, SELECT statement easily
+=item *
 
-=item * You can specify bind values by hash reference
+Execute C<insert>, C<update>, C<delete>, or C<select> statement easily
 
-=item * Filtering by data type. and you can set filter to any column
+=item *
 
-=item * Creating where clause flexibly
+Create C<where> clause flexibly
 
-=item * Support model
+=item *
+
+Model support
+
+=item *
+
+Connection manager support
+
+=item *
+
+Choice your favorite relation database management system,
+C<MySQL>, C<SQLite>, C<PostgreSQL>, C<Oracle>,
+C<Microsoft SQL Server>, C<Microsoft Access>, C<DB2> or anything, 
+
+=item *
+
+Filtering by data type or column name(EXPERIMENTAL)
+
+=item *
+
+Create C<order by> clause flexibly(EXPERIMENTAL)
 
 =back
 
-=head1 GUIDE
+=head1 DOCUMENTATIONS
 
-L<DBIx::Custom::Guide> - L<DBIx::Custom> Guide
-
-=head1 Wiki
+L<DBIx::Custom::Guide> - How to use L<DBIx::Custom>
 
 L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki>
+- Theare are various examples.
+
+Mosdule documentations - 
+L<DBIx::Custom::Result>,
+L<DBIx::Custom::Query>,
+L<DBIx::Custom::Where>,
+L<DBIx::Custom::Model>,
+L<DBIx::Custom::Order>
 
 =head1 ATTRIBUTES
 
@@ -1998,7 +2027,7 @@ Create assign parameter.
 
 This is equal to C<update_param> exept that set is not added.
 
-=head2 C<column> EXPERIMETNAL
+=head2 C<column>
 
     my $column = $dbi->column(book => ['author', 'title']);
 
@@ -2111,7 +2140,20 @@ Return value is L<DBIx::Custom::Result> object when select statement is executed
 or the count of affected rows when insert, update, delete statement is executed.
 
 Parameter is replaced by placeholder C<?>.
+    
+    # Before
+    select * from book where title = :title and author like :author
+    
+    # After
+    select * from where title = ? and author like ?;
 
+You can specify operator with parameter by C<name{operator}> syntax.
+This is EXPERIMENTAL.
+
+    # Before
+    select * from book where :title{=} and :author{like}
+    
+    # After
     select * from where title = ? and author like ?;
 
 The following opitons are available.
