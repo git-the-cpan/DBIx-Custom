@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1707';
+our $VERSION = '0.1708';
 use 5.008001;
 
 use Carp 'croak';
@@ -238,14 +238,17 @@ sub create_model {
     $model->name($model_name) unless $model->name;
     $model->table($model_table) unless $model->table;
     
-    # Apply filter
-    my $filter = ref $model->filter eq 'HASH'
-               ? [%{$model->filter}]
-               : $model->filter;
-    warn "DBIx::Custom::Model filter method is DEPRECATED!"
-      if @$filter;
-    $self->_apply_filter($model->table, @$filter);
-
+    # Apply filter(DEPRECATED logic)
+    if ($model->{filter}) {
+        my $filter = ref $model->filter eq 'HASH'
+                   ? [%{$model->filter}]
+                   : $model->filter;
+        $filter ||= [];
+        warn "DBIx::Custom::Model filter method is DEPRECATED!"
+          if @$filter;
+        $self->_apply_filter($model->table, @$filter);
+    }
+    
     # Set model
     $self->model($model->name, $model);
     
@@ -326,58 +329,48 @@ sub execute {
     $self->last_sql($query->sql);
 
     return $query if $query_return;
+    
+    # DEPRECATED! Merge query filter
     $filter ||= $query->{filter} || {};
     
     # Tables
     unshift @$tables, @{$query->{tables} || []};
-    my $main_table = pop @$tables;
-    $tables = $self->_remove_duplicate_table($tables, $main_table);
-    if (my $q = $self->_quote) {
-        $q = quotemeta($q);
-        $_ =~ s/[$q]//g for @$tables;
-    }
+    my $main_table = @{$tables}[-1];
+    
+    # DEPRECATED! Cleanup tables
+    $tables = $self->_remove_duplicate_table($tables, $main_table)
+      if @$tables > 1;
     
     # Type rule
     my $type_filters = {};
     unless ($type_rule_off) {
-        foreach my $name (keys %$param) {
-            my $table;
-            my $column;
-            if ($name =~ /(?:(.+)\.)?(.+)/) {
-                $table = $1;
-                $column = $2;
-            }
-            $table ||= $main_table;
-            
-            foreach my $i (1 .. 2) {
-                unless ($type_rule_off_parts->{$i}) {
-                    my $into = $self->{"_into$i"} || {};
+        foreach my $i (1, 2) {
+            unless ($type_rule_off_parts->{$i}) {
+                $type_filters->{$i} = {};
+                foreach my $alias (keys %$table_alias) {
+                    my $table = $table_alias->{$alias};
                     
-                    my $alias = $table;
-                    $table = $table_alias->{$alias}
-                      if defined $alias && $table_alias->{$alias};
-                    
-                    if (defined $table && $into->{$table} &&
-                        (my $rule = $into->{$table}->{$column}))
-                    {
-                        $type_filters->{$i}->{$column} = $rule;
-                        $type_filters->{$i}->{"$table.$column"} = $rule;
-                        $type_filters->{$i}->{"$alias.$column"} = $rule if $alias ne $table;
+                    foreach my $column (keys %{$self->{"_into$i"}{key}{$table} || {}}) {
+                        $type_filters->{$i}->{"$alias.$column"} = $self->{"_into$i"}{key}{$table}{$column};
                     }
                 }
+                $type_filters->{$i} = {%{$type_filters->{$i}}, %{$self->{"_into$i"}{key}{$main_table} || {}}}
+                  if $main_table;
             }
         }
     }
     
-    # Applied filter
-    my $applied_filter = {};
-    foreach my $table (@$tables) {
-        $applied_filter = {
-            %$applied_filter,
-            %{$self->{filter}{out}->{$table} || {}}
+    # DEPRECATED! Applied filter
+    if ($self->{filter}{on}) {
+        my $applied_filter = {};
+        foreach my $table (@$tables) {
+            $applied_filter = {
+                %$applied_filter,
+                %{$self->{filter}{out}->{$table} || {}}
+            }
         }
+        $filter = {%$applied_filter, %$filter};
     }
-    $filter = {%$applied_filter, %$filter};
     
     # Replace filter name to code
     foreach my $column (keys %$filter) {
@@ -416,10 +409,8 @@ sub execute {
         $affected = $sth->execute;
     };
     
-    if ($@) {
-        $self->_croak($@, qq{. Following SQL is executed.\n}
-                        . qq{$query->{sql}\n} . _subname);
-    }
+    $self->_croak($@, qq{. Following SQL is executed.\n}
+      . qq{$query->{sql}\n} . _subname) if $@;
     
     # DEBUG message
     if (DEBUG) {
@@ -438,17 +429,19 @@ sub execute {
     # Select statement
     if ($sth->{NUM_OF_FIELDS}) {
         
-        # Filter
+        # DEPRECATED! Filter
         my $filter = {};
-        $filter->{in}  = {};
-        $filter->{end} = {};
-        push @$tables, $main_table if $main_table;
-        foreach my $table (@$tables) {
-            foreach my $way (qw/in end/) {
-                $filter->{$way} = {
-                    %{$filter->{$way}},
-                    %{$self->{filter}{$way}{$table} || {}}
-                };
+        if ($self->{filter}{on}) {
+            $filter->{in}  = {};
+            $filter->{end} = {};
+            push @$tables, $main_table if $main_table;
+            foreach my $table (@$tables) {
+                foreach my $way (qw/in end/) {
+                    $filter->{$way} = {
+                        %{$filter->{$way}},
+                        %{$self->{filter}{$way}{$table} || {}}
+                    };
+                }
             }
         }
         
@@ -976,7 +969,8 @@ sub type_rule {
                         $filter = $self->filters->{$fname};
                     }
 
-                    $self->{"_$into"}{$table}{$column} = $filter;
+                    $self->{"_$into"}{key}{$table}{$column} = $filter;
+                    $self->{"_$into"}{dot}{"$table.$column"} = $filter;
                 }
             });
         }
@@ -1197,7 +1191,7 @@ sub _create_bind_values {
         # Type rule
         foreach my $i (1 .. 2) {
             my $type_filter = $type_filters->{$i};
-            my $tf = $type_filter->{$column};
+            my $tf = $self->{"_into$i"}->{dot}->{$column} || $type_filter->{$column};
             $value = $tf->($value) if $tf;
         }
         
@@ -1391,7 +1385,13 @@ sub _remove_duplicate_table {
     my %tables = map {defined $_ ? ($_ => 1) : ()} @$tables;
     delete $tables{$main_table} if $main_table;
     
-    return [keys %tables, $main_table ? $main_table : ()];
+    my $new_tables = [keys %tables, $main_table ? $main_table : ()];
+    if (my $q = $self->_quote) {
+        $q = quotemeta($q);
+        $_ =~ s/[$q]//g for @$new_tables;
+    }
+
+    return $new_tables;
 }
 
 sub _search_tables {
@@ -1456,6 +1456,7 @@ sub _apply_filter {
 
     # Initialize filters
     $self->{filter} ||= {};
+    $self->{filter}{on} = 1;
     $self->{filter}{out} ||= {};
     $self->{filter}{in} ||= {};
     $self->{filter}{end} ||= {};
@@ -1840,6 +1841,10 @@ Create C<where> clause flexibly
 
 =item *
 
+Named place holder support
+
+=item *
+
 Model support
 
 =item *
@@ -1869,7 +1874,7 @@ L<DBIx::Custom::Guide> - How to use L<DBIx::Custom>
 L<DBIx::Custom Wiki|https://github.com/yuki-kimoto/DBIx-Custom/wiki>
 - Theare are various examples.
 
-Mosdule documentations - 
+Module documentations - 
 L<DBIx::Custom::Result>,
 L<DBIx::Custom::Query>,
 L<DBIx::Custom::Where>,
@@ -1881,10 +1886,10 @@ L<DBIx::Custom::Order>
 =head2 C<connector>
 
     my $connector = $dbi->connector;
-    $dbi = $dbi->connector(DBIx::Connector->new(...));
+    $dbi = $dbi->connector($connector);
 
-Connection manager object. if connector is set, you can get C<dbh>
-through connection manager. conection manager object must have C<dbh> mehtod.
+Connection manager object. if C<connector> is set, you can get C<dbh>
+through connection manager. Conection manager object must have C<dbh> mehtod.
 
 This is L<DBIx::Connector> example. Please pass
 C<default_dbi_option> to L<DBIx::Connector> C<new> method.
@@ -2149,19 +2154,19 @@ or the count of affected rows when insert, update, delete statement is executed.
 
 Named placeholder such as C<:title> is replaced by placeholder C<?>.
     
-    # Before
+    # Original
     select * from book where title = :title and author like :author
     
-    # After
+    # Replaced
     select * from where title = ? and author like ?;
 
 You can specify operator with named placeholder
  by C<name{operator}> syntax.
 
-    # Before
+    # Original
     select * from book where :title{=} and :author{like}
     
-    # After
+    # Replaced
     select * from where title = ? and author like ?;
 
 The following opitons are available.
