@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1706';
+our $VERSION = '0.1707';
 use 5.008001;
 
 use Carp 'croak';
@@ -2147,7 +2147,7 @@ Second argunet is data, embedded into column parameter.
 Return value is L<DBIx::Custom::Result> object when select statement is executed,
 or the count of affected rows when insert, update, delete statement is executed.
 
-Parameter is replaced by placeholder C<?>.
+Named placeholder such as C<:title> is replaced by placeholder C<?>.
     
     # Before
     select * from book where title = :title and author like :author
@@ -2155,8 +2155,8 @@ Parameter is replaced by placeholder C<?>.
     # After
     select * from where title = ? and author like ?;
 
-You can specify operator with parameter by C<name{operator}> syntax.
-This is EXPERIMENTAL.
+You can specify operator with named placeholder
+ by C<name{operator}> syntax.
 
     # Before
     select * from book where :title{=} and :author{like}
