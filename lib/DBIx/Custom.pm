@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1705';
+our $VERSION = '0.1706';
 use 5.008001;
 
 use Carp 'croak';
@@ -326,10 +326,10 @@ sub execute {
     $self->last_sql($query->sql);
 
     return $query if $query_return;
-    $filter ||= $query->filter;
+    $filter ||= $query->{filter} || {};
     
     # Tables
-    unshift @$tables, @{$query->tables};
+    unshift @$tables, @{$query->{tables} || []};
     my $main_table = pop @$tables;
     $tables = $self->_remove_duplicate_table($tables, $main_table);
     if (my $q = $self->_quote) {
@@ -1110,7 +1110,7 @@ sub _create_query {
         # Create query
         if ($q) {
             $query = DBIx::Custom::Query->new($q);
-            $query->filters($self->filters);
+            $query->{filters} = $self->filters;
         }
     }
     
@@ -1135,7 +1135,7 @@ sub _create_query {
             {
                 sql     => $query->sql, 
                 columns => $query->columns,
-                tables  => $query->tables
+                tables  => $query->{tables} || []
             }
         ) if $cache;
     }
@@ -1156,7 +1156,7 @@ sub _create_query {
     $query->sth($sth);
     
     # Set filters
-    $query->filters($self->filters);
+    $query->{filters} = $self->filters;
     
     return $query;
 }
@@ -1848,7 +1848,7 @@ Connection manager support
 
 =item *
 
-Choice your favorite relation database management system,
+Choice your favorite relational database management system,
 C<MySQL>, C<SQLite>, C<PostgreSQL>, C<Oracle>,
 C<Microsoft SQL Server>, C<Microsoft Access>, C<DB2> or anything, 
 
@@ -1970,6 +1970,10 @@ Query builder, default to L<DBIx::Custom::QueryBuilder> object.
 Reserved word quote.
 Default to double quote '"' except for mysql.
 In mysql, default to back quote '`'
+
+You can set quote pair.
+
+    $dbi->quote('[]');
 
 =head2 C<result_class>
 
@@ -2192,10 +2196,37 @@ and before type rule filter is executed.
     query => 1
 
 C<execute> method return L<DBIx::Custom::Query> object, not executing SQL.
-You can check executed SQL and columns order.
+You can check SQL or get statment handle.
 
     my $sql = $query->sql;
+    my $sth = $query->sth;
     my $columns = $query->columns;
+    
+If you want to execute SQL fast, you can do the following way.
+
+    my $query;
+    foreach my $row (@$rows) {
+      $query ||= $dbi->insert($row, table => 'table1', query => 1);
+      $dbi->execute($query, $row, filter => {ab => sub { $_[0] * 2 }});
+    }
+
+Statement handle is reused and SQL parsing is finished,
+so you can get more performance than normal way.
+
+If you want to execute SQL as possible as fast and don't need filtering.
+You can do the following way.
+    
+    my $query;
+    my $sth;
+    foreach my $row (@$rows) {
+      $query ||= $dbi->insert($row, table => 'book', query => 1);
+      $sth ||= $query->sth;
+      $sth->execute(map { $row->{$_} } sort keys %$row);
+    }
+
+Note that $row must be simple hash reference, such as
+{title => 'Perl', author => 'Ken'}.
+and don't forget to sort $row values by $row key asc order.
 
 =item C<table>
     
@@ -3094,23 +3125,28 @@ L<DBIx::Custom>
 
 L<DBIx::Custom::Model>
 
-    # Attribute method
+    # Attribute methods
     filter # will be removed at 2017/1/1
     name # will be removed at 2017/1/1
     type # will be removed at 2017/1/1
 
 L<DBIx::Custom::Query>
     
-    # Attribute method
+    # Attribute methods
     default_filter # will be removed at 2017/1/1
+    table # will be removed at 2017/1/1
+    filters # will be removed at 2017/1/1
+    
+    # Methods
+    filter # will be removed at 2017/1/1
 
 L<DBIx::Custom::QueryBuilder>
     
-    # Attribute method
+    # Attribute methods
     tags # will be removed at 2017/1/1
     tag_processors # will be removed at 2017/1/1
     
-    # Method
+    # Methods
     register_tag # will be removed at 2017/1/1
     register_tag_processor # will be removed at 2017/1/1
     
@@ -3120,7 +3156,7 @@ L<DBIx::Custom::QueryBuilder>
 
 L<DBIx::Custom::Result>
     
-    # Attribute method
+    # Attribute methods
     filter_check # will be removed at 2017/1/1
     
     # Methods
