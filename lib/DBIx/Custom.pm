@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1709';
+our $VERSION = '0.1710';
 use 5.008001;
 
 use Carp 'croak';
@@ -51,7 +51,7 @@ has [qw/connector dsn password quote user/],
     },
     last_sql => '',
     models => sub { {} },
-    query_builder => sub { DBIx::Custom::QueryBuilder->new },
+    query_builder => sub { DBIx::Custom::QueryBuilder->new(dbi => shift) },
     result_class  => 'DBIx::Custom::Result',
     safety_character => '\w',
     stash => sub { {} },
@@ -448,7 +448,7 @@ sub execute {
         # Result
         my $result = $self->result_class->new(
             sth => $sth,
-            filters => $self->filters,
+            dbi => $self,
             default_filter => $self->{default_in_filter},
             filter => $filter->{in} || {},
             end_filter => $filter->{end} || {},
@@ -1073,17 +1073,7 @@ sub update_param {
     return $tag;
 }
 
-sub where {
-    my $self = shift;
-    
-    # Create where
-    return DBIx::Custom::Where->new(
-        query_builder => $self->query_builder,
-        safety_character => $self->safety_character,
-        quote => $self->_quote,
-        @_
-    );
-}
+sub where { DBIx::Custom::Where->new(dbi => shift, @_) }
 
 sub _create_query {
     
@@ -1113,8 +1103,6 @@ sub _create_query {
 
         # Create query
         my $builder = $self->query_builder;
-        $builder->{_tag_parse} = $self->tag_parse;
-        $builder->safety_character($self->safety_character);
         $query = $builder->build_query($source);
 
         # Remove reserved word quote

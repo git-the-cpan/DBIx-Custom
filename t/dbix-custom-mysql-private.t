@@ -124,7 +124,22 @@ $rows = $dbi->select(
   append => "order by key2 {limit 1}"
 )->fetch_hash_all;
 is_deeply($rows, [{key1 => 1, key2 => 2}]);
+
+$dbi->dbh->disconnect;
+$dbi = undef;
+$dbi = DBIx::Custom->connect(
+    dsn => "dbi:mysql:database=$DATABASE",
+    user => $USER,
+    password => $PASSWORD
+);
+$rows = $dbi->select(
+  table => 'table1',
+  where => {key1 => 1, key2 => 4},
+  append => "order by key2 limit 0, 1"
+)->fetch_hash_all;
+is_deeply($rows, [{key1 => 1, key2 => 4}]);
 $dbi->delete_all(table => 'table1');
+
 
 
 test 'type_rule';

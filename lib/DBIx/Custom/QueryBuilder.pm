@@ -10,7 +10,7 @@ use DBIx::Custom::Util '_subname';
 push @DBIx::Custom::CARP_NOT, __PACKAGE__;
 push @DBIx::Custom::Where::CARP_NOT, __PACKAGE__;
 
-has 'safety_character';
+has 'dbi';
 
 sub build_query {
     my ($self, $source) = @_;
@@ -18,8 +18,7 @@ sub build_query {
     my $query;
     
     # Parse tag. tag is DEPRECATED!
-    $self->{_tag_parse} = 1 unless defined $self->{_tag_parse};
-    if ($self->{_tag_parse} && $source =~ /(\s|^)\{/) {
+    if ($self->dbi->tag_parse && $source =~ /(\s|^)\{/) {
         $query = $self->_parse_tag($source);
         my $tag_count = delete $query->{tag_count};
         warn qq/Tag system such as {? name} is DEPRECATED! / .
@@ -72,7 +71,7 @@ sub _parse_parameter {
     # Get and replace parameters
     my $sql = $source || '';
     my $columns = [];
-    my $c = $self->safety_character;
+    my $c = $self->dbi->safety_character;
     # Parameter regex
     $sql =~ s/([^:]):(\d+):([^:])/$1\\:$2\\:$3/g;
     my $re = qr/(^|.*?[^\\]):([$c\.]+)(?:\{(.*?)\})?(.*)/s;
@@ -306,6 +305,15 @@ DBIx::Custom::QueryBuilder - Query builder
     my $query = $builder->build_query(
         "select from table title = :title and author = :author"
     );
+
+=head1 ATTRIBUTES
+
+=head2 C<dbi>
+
+    my $dbi = $builder->dbi;
+    $builder = $builder->dbi($dbi);
+
+L<DBIx::Custom> object.
 
 =head1 METHODS
 
