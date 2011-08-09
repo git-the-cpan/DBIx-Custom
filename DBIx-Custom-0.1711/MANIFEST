@@ -119,4 +119,3 @@ t/sqlite-quote.t
 t/sqlite.t
 xt/boilerplate.t
 xt/pod.t
-META.yml                                 Module meta-data (added by MakeMaker)
