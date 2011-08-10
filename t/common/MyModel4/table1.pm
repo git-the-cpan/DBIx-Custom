@@ -1,4 +1,4 @@
-package MyModel4::book;
+package MyModel4::table1;
 
 use base 'MyModel4';
 

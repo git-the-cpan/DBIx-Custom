@@ -1,4 +1,4 @@
-package MyModel1::book;
+package MyModel1::table1;
 
 use DBIx::Custom::Model -base;
 

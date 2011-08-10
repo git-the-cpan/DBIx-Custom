@@ -1,4 +1,4 @@
-package MyModel4::company;
+package MyModel4::table2;
 
 use base 'MyModel4';
 

@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1711';
+our $VERSION = '0.1712';
 use 5.008001;
 
 use Carp 'croak';
@@ -19,7 +19,7 @@ use Encode qw/encode encode_utf8 decode_utf8/;
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
-has [qw/connector dsn password quote user/],
+has [qw/connector dsn password quote user exclude_table/],
     cache => 0,
     cache_method => sub {
         sub {
@@ -51,11 +51,42 @@ has [qw/connector dsn password quote user/],
     },
     last_sql => '',
     models => sub { {} },
-    query_builder => sub { DBIx::Custom::QueryBuilder->new(dbi => shift) },
     result_class  => 'DBIx::Custom::Result',
     safety_character => '\w',
+    separator => '.',
     stash => sub { {} },
     tag_parse => 1;
+
+sub available_datatype {
+    my $self = shift;
+    
+    my $data_types = '';
+    foreach my $i (-1000 .. 1000) {
+         my $type_info = $self->dbh->type_info($i);
+         my $data_type = $type_info->{DATA_TYPE};
+         my $type_name = $type_info->{TYPE_NAME};
+         $data_types .= "$data_type ($type_name)\n"
+           if defined $data_type;
+    }
+    return "Data Type maybe equal to Type Name" unless $data_types;
+    $data_types = "Data Type (Type name)\n" . $data_types;
+    return $data_types;
+}
+
+sub available_typename {
+    my $self = shift;
+    
+    # Type Names
+    my $type_names = {};
+    $self->each_column(sub {
+        my ($self, $table, $column, $column_info) = @_;
+        $type_names->{$column_info->{TYPE_NAME}} = 1
+          if $column_info->{TYPE_NAME};
+    });
+    my @output = sort keys %$type_names;
+    unshift @output, "Type Name";
+    return join "\n", @output;
+}
 
 our $AUTOLOAD;
 sub AUTOLOAD {
@@ -220,7 +251,9 @@ sub delete {
 
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
-sub DESTROY { }
+sub DESTROY {
+
+}
 
 sub create_model {
     my $self = shift;
@@ -257,6 +290,8 @@ sub create_model {
 
 sub each_column {
     my ($self, $cb) = @_;
+
+    my $re = $self->exclude_table;
     
     # Iterate all tables
     my $sth_tables = $self->dbh->table_info;
@@ -264,6 +299,7 @@ sub each_column {
         
         # Table
         my $table = $table_info->{TABLE_NAME};
+        next if defined $re && $table =~ /$re/;
         
         # Iterate all columns
         my $sth_columns = $self->dbh->column_info(undef, undef, $table, '%');
@@ -277,12 +313,15 @@ sub each_column {
 sub each_table {
     my ($self, $cb) = @_;
     
+    my $re = $self->exclude_table;
+    
     # Iterate all tables
     my $sth_tables = $self->dbh->table_info;
     while (my $table_info = $sth_tables->fetchrow_hashref) {
         
         # Table
         my $table = $table_info->{TABLE_NAME};
+        next if defined $re && $table =~ /$re/;
         $self->$cb($table, $table_info);
     }
 }
@@ -706,8 +745,23 @@ sub new {
           unless $self->can($attr);
     }
     
-    # DEPRECATED!
-    $self->query_builder->{tags} = {
+    return $self;
+}
+
+my $not_exists = bless {}, 'DBIx::Custom::NotExists';
+sub not_exists { $not_exists }
+
+sub order {
+    my $self = shift;
+    return DBIx::Custom::Order->new(dbi => $self, @_);
+}
+
+sub query_builder {
+    my $self = shift;
+    my $builder = DBIx::Custom::QueryBuilder->new(dbi => $self);
+    
+    # DEPRECATED
+    $builder->register_tag(
         '?'     => \&DBIx::Custom::Tag::placeholder,
         '='     => \&DBIx::Custom::Tag::equal,
         '<>'    => \&DBIx::Custom::Tag::not_equal,
@@ -719,17 +773,9 @@ sub new {
         'in'    => \&DBIx::Custom::Tag::in,
         'insert_param' => \&DBIx::Custom::Tag::insert_param,
         'update_param' => \&DBIx::Custom::Tag::update_param
-    };
-    
-    return $self;
-}
-
-my $not_exists = bless {}, 'DBIx::Custom::NotExists';
-sub not_exists { $not_exists }
-
-sub order {
-    my $self = shift;
-    return DBIx::Custom::Order->new(dbi => $self, @_);
+    );
+    $builder->register_tag($self->{_tags} || {});
+    return $builder;
 }
 
 sub register_filter {
@@ -875,22 +921,6 @@ sub select {
     return $result;
 }
 
-sub separator {
-    my $self = shift;
-    
-    if (@_) {
-        my $separator = $_[0] || '';
-        croak qq{Separator must be "." or "__" or "-" } . _subname
-          unless $separator eq '.' || $separator eq '__'
-              || $separator eq '-';
-        
-        $self->{separator} = $separator;
-    
-        return $self;
-    }
-    return $self->{separator} ||= '.';
-}
-
 sub setup_model {
     my $self = shift;
     
@@ -906,35 +936,37 @@ sub setup_model {
     return $self;
 }
 
-sub available_datatype {
-    my $self = shift;
+sub show_datatype {
+    my ($self, $table) = @_;
+    croak "Table name must be specified" unless defined $table;
+    print "$table\n";
     
-    my $data_types = '';
-    foreach my $i (-1000 .. 1000) {
-         my $type_info = $self->dbh->type_info($i);
-         my $data_type = $type_info->{DATA_TYPE};
-         my $type_name = $type_info->{TYPE_NAME};
-         $data_types .= "$data_type ($type_name)\n"
-           if defined $data_type;
+    my $result = $self->select(table => $table, where => "'0' <> '0'");
+    my $sth = $result->sth;
+
+    my $columns = $sth->{NAME};
+    my $data_types = $sth->{TYPE};
+    
+    for (my $i = 0; $i < @$columns; $i++) {
+        my $column = $columns->[$i];
+        my $data_type = $data_types->[$i];
+        print "$column: $data_type\n";
     }
-    return "Data Type maybe equal to Type Name" unless $data_types;
-    $data_types = "Data Type (Type name)\n" . $data_types;
-    return $data_types;
 }
 
-sub available_typename {
-    my $self = shift;
+sub show_typename {
+    my ($self, $t) = @_;
+    croak "Table name must be specified" unless defined $t;
+    print "$t\n";
     
-    # Type Names
-    my $type_names = {};
     $self->each_column(sub {
-        my ($self, $table, $column, $column_info) = @_;
-        $type_names->{$column_info->{TYPE_NAME}} = 1
-          if $column_info->{TYPE_NAME};
+        my ($self, $table, $column, $infos) = @_;
+        return unless $table eq $t;
+        my $typename = $infos->{TYPE_NAME};
+        print "$column: $typename\n";
     });
-    my @output = sort keys %$type_names;
-    unshift @output, "Type Name";
-    return join "\n", @output;
+    
+    return $self;
 }
 
 sub type_rule {
@@ -1639,8 +1671,25 @@ sub insert_at {
 
 # DEPRECATED!
 sub register_tag {
+    my $self = shift;
+    
     warn "register_tag is DEPRECATED!";
-    shift->query_builder->register_tag(@_)
+    
+    # Merge tag
+    my $tags = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_tags} = {%{$self->{_tags} || {}}, %$tags};
+    
+    return $self;
+}
+
+# DEPRECATED!
+sub register_tag_processor {
+    my $self = shift;
+    warn "register_tag_processor is DEPRECATED!";
+    # Merge tag
+    my $tag_processors = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_tags} = {%{$self->{_tags} || {}}, %{$tag_processors}};
+    return $self;
 }
 
 # DEPRECATED!
@@ -1703,12 +1752,6 @@ sub insert_param_tag {
     warn "insert_param_tag is DEPRECATED! " .
          "use insert_param instead!";
     return shift->insert_param(@_);
-}
-
-# DEPRECATED!
-sub register_tag_processor {
-    warn "register_tag_processor is DEPRECATED!";
-    return shift->query_builder->register_tag_processor(@_);
 }
 
 # DEPRECATED!
@@ -1951,10 +1994,9 @@ Password, used when C<connect> method is executed.
 
 =head2 C<query_builder>
 
-    my $sql_class = $dbi->query_builder;
-    $dbi = $dbi->query_builder(DBIx::Custom::QueryBuilder->new);
+    my $builder = $dbi->query_builder;
 
-Query builder, default to L<DBIx::Custom::QueryBuilder> object.
+Creat query builder. This is L<DBIx::Custom::QueryBuilder>.
 
 =head2 C<quote>
 
@@ -1983,6 +2025,26 @@ Result class, default to L<DBIx::Custom::Result>.
 
 Regex of safety character for table and column name, default to '\w'.
 Note that you don't have to specify like '[\w]'.
+
+=head2 C<separator>
+
+    my $separator = $self->separator;
+    $dbi = $self->separator($separator);
+
+Separator whichi join table and column.
+This is used by C<column> and C<mycolumn> method.
+
+=head2 C<exclude_table EXPERIMENTAL>
+
+    my $exclude_table = $self->exclude_table;
+    $dbi = $self->exclude_table(qr/pg_/);
+
+Regex matching system table.
+this regex match is used by C<each_table> method and C<each_column> method
+System table is ignored.
+C<type_rule> method and C<setup_model> method call
+C<each_table>, so if you set C<exclude_table> properly,
+The performance is up.
 
 =head2 C<tag_parse>
 
@@ -2038,7 +2100,7 @@ Create column clause. The follwoing column clause is created.
     book.author as "book.author",
     book.title as "book.title"
 
-You can change separator by C<separator> method.
+You can change separator by C<separator> attribute.
 
     # Separator is double underbar
     $dbi->separator('__');
@@ -3082,6 +3144,30 @@ C<columns> of model object is automatically set, parsing database information.
 If environment variable C<DBIX_CUSTOM_DEBUG> is set to true,
 executed SQL and bind values are printed to STDERR.
 
+=head2 C<show_datatype EXPERIMENTAL>
+
+    $dbi->show_datatype($table);
+
+Show data type of the columns of specified table.
+
+    book
+    title: 5
+    issue_date: 91
+
+This data type is used in C<type_rule>'s C<from1> and C<from2>.
+
+=head2 C<show_typename EXPERIMENTAL>
+
+    $dbi->show_typename($table);
+
+Show type name of the columns of specified table.
+
+    book
+    title: varchar
+    issue_date: date
+
+This type name is used in C<type_rule>'s C<into1> and C<into2>.
+
 =head2 C<DBIX_CUSTOM_DEBUG_ENCODING>
 
 DEBUG output encoding. Default to UTF-8.
@@ -3108,6 +3194,7 @@ L<DBIx::Custom>
     default_bind_filter # will be removed at 2017/1/1
     default_fetch_filter # will be removed at 2017/1/1
     insert_param_tag # will be removed at 2017/1/1
+    register_tag # will be removed at 2017/1/1
     register_tag_processor # will be removed at 2017/1/1
     update_param_tag # will be removed at 2017/1/1
     
