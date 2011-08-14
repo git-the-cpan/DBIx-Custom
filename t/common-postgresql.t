@@ -3,7 +3,7 @@ use warnings;
 
 use FindBin;
 $ENV{DBIX_CUSTOM_TEST_RUN} = 1
-  if -f "$FindBin::Bin/run/common-postgresql.tmp";
+  if -f "$FindBin::Bin/run/common-postgresql.run";
 $ENV{DBIX_CUSTOM_SKIP_MESSAGE} = 'postgresql private test';
 
 use DBIx::Custom;
@@ -12,20 +12,18 @@ use DBIx::Custom;
     no warnings 'redefine';
 
     my $date_typename = 'Date';
-    my $time_typename = 'Time';
     my $datetime_typename = 'Timestamp';
 
     sub date_typename { lc $date_typename }
-    sub time_typename { lc $time_typename }
     sub datetime_typename { 'timestamp without time zone' }
 
     my $date_datatype = 91;
-    my $time_datatype = 'Time';
     my $datetime_datatype = 11;
 
     sub date_datatype { lc $date_datatype }
-    sub time_datatype { lc $time_datatype }
     sub datetime_datatype { lc $datetime_datatype }
+    
+    has datetime_suffix => '';
 
     has dsn => "dbi:Pg:dbname=dbix_custom";
     has user  => 'dbix_custom';

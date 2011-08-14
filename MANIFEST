@@ -17,6 +17,7 @@ t/common-mysql.t
 t/common-postgresql.t
 t/common-sqlite-quote.t
 t/common-sqlite.t
+t/common-sqlserver.t
 t/common.t
 t/common/MyDBI1.pm
 t/common/MyModel1/table1.pm

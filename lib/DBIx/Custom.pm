@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1714';
+our $VERSION = '0.1715';
 use 5.008001;
 
 use Carp 'croak';
@@ -15,7 +15,7 @@ use DBIx::Custom::Tag;
 use DBIx::Custom::Order;
 use DBIx::Custom::Util qw/_array_to_hash _subname/;
 use Encode qw/encode encode_utf8 decode_utf8/;
-use Scalar::Util qw/weaken isweak/;
+use Scalar::Util qw/weaken/;
 
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
@@ -55,7 +55,7 @@ has [qw/connector dsn password quote user exclude_table/],
     query_builder => sub {
         my $self = shift;
         my $builder = DBIx::Custom::QueryBuilder->new(dbi => $self);
-        weaken $builder->{dbi} unless isweak $builder->{dbi};
+        weaken $builder->{dbi};
         return $builder;
     },
     result_class  => 'DBIx::Custom::Result',
@@ -196,8 +196,10 @@ sub dbh {
         
         # Quote
         if (!defined $self->reserved_word_quote && !defined $self->quote) {
-            my $driver = $self->{dbh}->{Driver}->{Name};
-            my $quote = $driver eq 'mysql' ? '`' : '"';
+            my $driver = lc $self->{dbh}->{Driver}->{Name};
+            my $quote = $driver eq 'odbc' ? '[]'
+                       :$driver eq 'mysql' ? '`'
+                       : '"';
             $self->quote($quote);
         }
         
@@ -258,7 +260,7 @@ sub delete {
 
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
-sub DESTROY {}
+sub DESTROY { }
 
 sub create_model {
     my $self = shift;
@@ -273,7 +275,7 @@ sub create_model {
     
     # Create model
     my $model = $model_class->new($args);
-    weaken $model->{dbi} unless isweak $model->{dbi};
+    weaken $model->{dbi};
     $model->name($model_name) unless $model->name;
     $model->table($model_table) unless $model->table;
     
@@ -299,13 +301,21 @@ sub each_column {
 
     my $re = $self->exclude_table;
     
+    my %tables;
+    
     # Iterate all tables
     my $sth_tables = $self->dbh->table_info;
     while (my $table_info = $sth_tables->fetchrow_hashref) {
-        
         # Table
         my $table = $table_info->{TABLE_NAME};
         next if defined $re && $table =~ /$re/;
+        $tables{$table}++;
+    }
+
+    # Iterate all tables
+    my @tables = sort keys %tables;
+    for (my $i = 0; $i < @tables; $i++) {
+        my $table = $tables[$i];
         
         # Iterate all columns
         my $sth_columns = $self->dbh->column_info(undef, undef, $table, '%');
@@ -334,7 +344,7 @@ sub each_table {
 
 our %VALID_ARGS = map { $_ => 1 } qw/append allow_delete_all
   allow_update_all bind_type column filter id join param prefix primary_key
-  query relation table table_alias type type_rule_off type_rule1_off
+  query relation sqlfilter table table_alias type type_rule_off type_rule1_off
   type_rule2_off wrap/;
 
 sub execute {
@@ -360,6 +370,7 @@ sub execute {
     };
     my $query_return = delete $args{query};
     my $table_alias = delete $args{table_alias} || {};
+    my $sqlfilter = $args{sqlfilter};
     
     # Check argument names
     foreach my $name (keys %args) {
@@ -367,8 +378,7 @@ sub execute {
           unless $VALID_ARGS{$name};
     }
     
-    # Create query
-    $query = $self->_create_query($query) unless ref $query;
+    $query = $self->_create_query($query, $sqlfilter) unless ref $query;
     
     # Save query
     $self->last_sql($query->sql);
@@ -438,7 +448,7 @@ sub execute {
         $type_filters,
         $bind_type
     );
-    
+
     # Execute
     my $sth = $query->sth;
     my $affected;
@@ -1109,7 +1119,7 @@ sub where { DBIx::Custom::Where->new(dbi => shift, @_) }
 
 sub _create_query {
     
-    my ($self, $source) = @_;
+    my ($self, $source, $sqlfilter) = @_;
     
     # Cache
     my $cache = $self->cache;
@@ -1153,7 +1163,16 @@ sub _create_query {
             }
         ) if $cache;
     }
-    
+
+    # Filter SQL
+    if ($sqlfilter) {
+        my $sql = $query->sql;
+        $sql =~ s/\s*;$//;
+        $sql = $sqlfilter->($sql);
+        $sql .= ';';
+        $query->sql($sql);
+    }
+        
     # Save sql
     $self->last_sql($query->sql);
     
@@ -1385,7 +1404,7 @@ sub _quote {
 }
 
 sub _q {
-    my ($self, $value) = @_;
+    my ($self, $value, $quotemeta) = @_;
     
     my $quote = $self->_quote;
     my $q = substr($quote, 0, 1) || '';
@@ -1394,6 +1413,11 @@ sub _q {
         $p = substr($quote, 1, 1);
     }
     else { $p = $q }
+    
+    if ($quotemeta) {
+        $q = quotemeta($q);
+        $p = quotemeta($p);
+    }
     
     return "$q$value$p";
 }
@@ -1421,9 +1445,8 @@ sub _search_tables {
     my $tables = [];
     my $safety_character = $self->safety_character;
     my $q = $self->_quote;
-    my $q_re = quotemeta($q);
-    my $quoted_safety_character_re = $self->_q("?([$safety_character]+)");
-    my $table_re = $q ? qr/(?:^|[^$safety_character])$quoted_safety_character_re?\./
+    my $quoted_safety_character_re = $self->_q("?([$safety_character]+)", 1);
+    my $table_re = $q ? qr/(?:^|[^$safety_character])${quoted_safety_character_re}?\./
                       : qr/(?:^|[^$safety_character])([$safety_character]+)\./;
     while ($source =~ /$table_re/g) {
         push @$tables, $1;
@@ -1442,8 +1465,18 @@ sub _where_to_obj {
         my $clause = ['and'];
         my $q = $self->_quote;
         foreach my $column (keys %$where) {
-            my $column_quote = $self->_q($column);
-            $column_quote =~ s/\./$self->_q(".")/e;
+            my $table;
+            my $c;
+            if ($column =~ /(?:(.*?)\.)?(.*)/) {
+                $table = $1;
+                $c = $2;
+            }
+            
+            my $table_quote;
+            $table_quote = $self->_q($table) if defined $table;
+            my $column_quote = $self->_q($c);
+            $column_quote = $table_quote . '.' . $column_quote
+              if defined $table_quote;
             push @$clause, "$column_quote = :$column" for keys %$where;
         }
         $obj = $self->where(clause => $clause, param => $where);
@@ -2229,6 +2262,17 @@ The following opitons are available.
 
 =over 4
 
+=item C<bind_type>
+
+Specify database bind data type.
+
+    bind_type => [image => DBI::SQL_BLOB]
+    bind_type => [[qw/image audio/] => DBI::SQL_BLOB]
+
+This is used to bind parameter by C<bind_param> of statment handle.
+
+    $sth->bind_param($pos, $value, DBI::SQL_BLOB);
+
 =item C<filter>
     
     filter => {
@@ -2289,6 +2333,29 @@ Note that $row must be simple hash reference, such as
 {title => 'Perl', author => 'Ken'}.
 and don't forget to sort $row values by $row key asc order.
 
+=item C<sqlfilter EXPERIMENTAL> 
+
+SQL filter function.
+
+    sqlfilter => $code_ref
+
+This option is generally for Oracle and SQL Server paging process.
+    
+    my $limit = sub {
+        my ($sql, $count, $offset) = @_;
+        
+        my $min = $offset + 1;
+        my $max = $offset + $count;
+        
+        $sql = "select * from ( $sql ) as t where rnum >= $min rnum <= $max";
+        
+        return $sql;
+    }
+    $dbi->select(... column => ['ROWNUM rnom'], sqlfilter => sub {
+        my $sql = shift;
+        return $limit->($sql, 100, 50);
+    })
+
 =item C<table>
     
     table => 'author'
@@ -2304,17 +2371,6 @@ You must set C<table> option.
     $dbi->execute(
       "select * from book where title = :book.title and author = :book.author",
       {title => 'Perl', author => 'Ken');
-
-=item C<bind_type>
-
-Specify database bind data type.
-
-    bind_type => [image => DBI::SQL_BLOB]
-    bind_type => [[qw/image audio/] => DBI::SQL_BLOB]
-
-This is used to bind parameter by C<bind_param> of statment handle.
-
-    $sth->bind_param($pos, $value, DBI::SQL_BLOB);
 
 =item C<table_alias> EXPERIMENTAL
 
@@ -2392,6 +2448,10 @@ prefix before table name section.
 
 Same as C<execute> method's C<query> option.
 
+=item C<sqlfilter EXPERIMENTAL>
+
+Same as C<execute> method's C<sqlfilter> option.
+
 =item C<table>
 
     table => 'book'
@@ -2455,6 +2515,10 @@ The following opitons are available.
 
 Same as C<select> method's C<append> option.
 
+=item C<bind_type>
+
+Same as C<execute> method's C<bind_type> option.
+
 =item C<filter>
 
 Same as C<execute> method's C<filter> option.
@@ -2500,15 +2564,15 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
+=item C<sqlfilter EXPERIMENTAL>
+
+Same as C<execute> method's C<sqlfilter> option.
+
 =item C<table>
 
     table => 'book'
 
 Table name.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
 
 =item C<type_rule_off> EXPERIMENTAL
 
@@ -2808,6 +2872,10 @@ The following opitons are available.
     append => 'order by title'
 
 Append statement to last of SQL.
+
+=item C<bind_type>
+
+Same as C<execute> method's C<bind_type> option.
     
 =item C<column>
     
@@ -2944,9 +3012,9 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
-=item C<bind_type>
+=item C<sqlfilter EXPERIMENTAL>
 
-Same as C<execute> method's C<bind_type> option.
+Same as C<execute> method's C<sqlfilter> option
 
 =item C<table>
 
@@ -3002,7 +3070,7 @@ Where clause.
 
 Wrap statement. This is array reference.
 
-    $dbi->select(wrap => ['select * from (', ') as t where ROWNUM < 10']);
+    wrap => ['select * from (', ') as t where ROWNUM < 10']
 
 This option is for Oracle and SQL Server paging process.
 
@@ -3026,6 +3094,10 @@ The following opitons are available.
 =item C<append>
 
 Same as C<select> method's C<append> option.
+
+=item C<bind_type>
+
+Same as C<execute> method's C<bind_type> option.
 
 =item C<filter>
 
@@ -3073,19 +3145,15 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
+=item C<sqlfilter EXPERIMENTAL>
+
+Same as C<execute> method's C<sqlfilter> option.
+
 =item C<table>
 
     table => 'book'
 
 Table name.
-
-=item C<where>
-
-Same as C<select> method's C<where> option.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
 
 =item C<type_rule_off> EXPERIMENTAL
 
@@ -3102,6 +3170,10 @@ Same as C<execute> method's C<type_rule1_off> option.
     type_rule2_off => 1
 
 Same as C<execute> method's C<type_rule2_off> option.
+
+=item C<where>
+
+Same as C<select> method's C<where> option.
 
 =back
 
