@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1715';
+our $VERSION = '0.1716';
 use 5.008001;
 
 use Carp 'croak';
@@ -196,7 +196,7 @@ sub dbh {
         
         # Quote
         if (!defined $self->reserved_word_quote && !defined $self->quote) {
-            my $driver = lc $self->{dbh}->{Driver}->{Name};
+            my $driver = $self->_driver;
             my $quote = $driver eq 'odbc' ? '[]'
                        :$driver eq 'mysql' ? '`'
                        : '"';
@@ -301,16 +301,9 @@ sub each_column {
 
     my $re = $self->exclude_table;
     
+    # Tables
     my %tables;
-    
-    # Iterate all tables
-    my $sth_tables = $self->dbh->table_info;
-    while (my $table_info = $sth_tables->fetchrow_hashref) {
-        # Table
-        my $table = $table_info->{TABLE_NAME};
-        next if defined $re && $table =~ /$re/;
-        $tables{$table}++;
-    }
+    $self->each_table(sub { $tables{$_[1]}++ });
 
     # Iterate all tables
     my @tables = sort keys %tables;
@@ -978,6 +971,15 @@ sub show_typename {
     return $self;
 }
 
+sub show_tables {
+    my $self = shift;
+    
+    my %tables;
+    $self->each_table(sub { $tables{$_[1]}++ });
+    print join("\n", sort keys %tables) . "\n";
+    return $self;
+}
+
 sub type_rule {
     my $self = shift;
     
@@ -1167,9 +1169,7 @@ sub _create_query {
     # Filter SQL
     if ($sqlfilter) {
         my $sql = $query->sql;
-        $sql =~ s/\s*;$//;
         $sql = $sqlfilter->($sql);
-        $sql .= ';';
         $query->sql($sql);
     }
         
@@ -1317,6 +1317,8 @@ sub _croak {
         croak "$error$append";
     }
 }
+
+sub _driver { lc shift->{dbh}->{Driver}->{Name} }
 
 sub _need_tables {
     my ($self, $tree, $need_tables, $tables) = @_;
@@ -3226,6 +3228,12 @@ Show data type of the columns of specified table.
     issue_date: 91
 
 This data type is used in C<type_rule>'s C<from1> and C<from2>.
+
+=head2 C<show_tables EXPERIMETNAL>
+
+    $dbi->show_tables;
+
+Show tables.
 
 =head2 C<show_typename EXPERIMENTAL>
 
