@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1716';
+our $VERSION = '0.1717';
 use 5.008001;
 
 use Carp 'croak';
@@ -20,7 +20,8 @@ use Scalar::Util qw/weaken/;
 use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
 use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
-has [qw/connector dsn password quote user exclude_table/],
+has [qw/connector dsn password quote user exclude_table user_table_info
+        user_column_info/],
     cache => 0,
     cache_method => sub {
         sub {
@@ -163,7 +164,21 @@ sub column {
 }
 
 sub connect {
-    my $self = ref $_[0] ? shift : shift->new(@_);;
+    my $self = ref $_[0] ? shift : shift->new(@_);
+    
+    my $connector = $self->connector;
+    
+    if (!ref $connector && $connector) {
+        require DBIx::Connector;
+        
+        my $dsn = $self->dsn;
+        my $user = $self->user;
+        my $password = $self->password;
+        my $dbi_option = {%{$self->dbi_options}, %{$self->dbi_option}};
+        my $connector = DBIx::Connector->new($dsn, $user, $password,
+          {%{$self->default_dbi_option} , %$dbi_option});
+        $self->connector($connector);
+    }
     
     # Connect
     $self->dbh;
@@ -197,8 +212,9 @@ sub dbh {
         # Quote
         if (!defined $self->reserved_word_quote && !defined $self->quote) {
             my $driver = $self->_driver;
-            my $quote = $driver eq 'odbc' ? '[]'
-                       :$driver eq 'mysql' ? '`'
+            my $quote =  $driver eq 'odbc' ? '[]'
+                       : $driver eq 'ado' ? '[]'
+                       : $driver eq 'mysql' ? '`'
                        : '"';
             $self->quote($quote);
         }
@@ -260,7 +276,7 @@ sub delete {
 
 sub delete_all { shift->delete(allow_delete_all => 1, @_) }
 
-sub DESTROY { }
+sub DESTROY {}
 
 sub create_model {
     my $self = shift;
@@ -297,41 +313,56 @@ sub create_model {
 }
 
 sub each_column {
-    my ($self, $cb) = @_;
+    my ($self, $cb, %options) = @_;
 
-    my $re = $self->exclude_table;
+    my $user_column_info = $self->user_column_info;
     
-    # Tables
-    my %tables;
-    $self->each_table(sub { $tables{$_[1]}++ });
+    if ($user_column_info) {
+        $self->$cb($_->{table}, $_->{column}, $_->{info}) for @$user_column_info;
+    }
+    else {
+    
+        my $re = $self->exclude_table || $options{exclude_table};
+        # Tables
+        my %tables;
+        $self->each_table(sub { $tables{$_[1]}++ });
 
-    # Iterate all tables
-    my @tables = sort keys %tables;
-    for (my $i = 0; $i < @tables; $i++) {
-        my $table = $tables[$i];
-        
-        # Iterate all columns
-        my $sth_columns = $self->dbh->column_info(undef, undef, $table, '%');
-        while (my $column_info = $sth_columns->fetchrow_hashref) {
-            my $column = $column_info->{COLUMN_NAME};
-            $self->$cb($table, $column, $column_info);
+        # Iterate all tables
+        my @tables = sort keys %tables;
+        for (my $i = 0; $i < @tables; $i++) {
+            my $table = $tables[$i];
+            
+            # Iterate all columns
+            my $sth_columns;
+            eval {$sth_columns = $self->dbh->column_info(undef, undef, $table, '%')};
+            next if $@;
+            while (my $column_info = $sth_columns->fetchrow_hashref) {
+                my $column = $column_info->{COLUMN_NAME};
+                $self->$cb($table, $column, $column_info);
+            }
         }
     }
 }
 
 sub each_table {
-    my ($self, $cb) = @_;
+    my ($self, $cb, %option) = @_;
     
-    my $re = $self->exclude_table;
+    my $user_table_infos = $self->user_table_info;
     
-    # Iterate all tables
-    my $sth_tables = $self->dbh->table_info;
-    while (my $table_info = $sth_tables->fetchrow_hashref) {
-        
-        # Table
-        my $table = $table_info->{TABLE_NAME};
-        next if defined $re && $table =~ /$re/;
-        $self->$cb($table, $table_info);
+    # Iterate tables
+    if ($user_table_infos) {
+        $self->$cb($_->{table}, $_->{info}) for @$user_table_infos;
+    }
+    else {
+        my $re = $self->exclude_table || $option{exclude};
+        my $sth_tables = $self->dbh->table_info;
+        while (my $table_info = $sth_tables->fetchrow_hashref) {
+            
+            # Table
+            my $table = $table_info->{TABLE_NAME};
+            next if defined $re && $table =~ /$re/;
+            $self->$cb($table, $table_info);
+        }
     }
 }
 
@@ -511,6 +542,38 @@ sub execute {
     
     # Not select statement
     else { return $affected }
+}
+
+sub get_table_info {
+    my ($self, %args) = @_;
+    
+    my $exclude = delete $args{exclude};
+    croak qq/"$_" is wrong option/ for keys %args;
+    
+    my $table_info = [];
+    $self->each_table(
+        sub { push @$table_info, {table => $_[1], info => $_[2] } },
+        exclude => $exclude
+    );
+    
+    return [sort {$a->{table} cmp $b->{table} } @$table_info];
+}
+
+sub get_column_info {
+    my ($self, %args) = @_;
+    
+    my $exclude_table = delete $args{exclude_table};
+    croak qq/"$_" is wrong option/ for keys %args;
+    
+    my $column_info = [];
+    $self->each_column(
+        sub { push @$column_info, {table => $_[1], column => $_[2], info => $_[3] } },
+        exclude_table => $exclude_table
+    );
+    
+    return [
+      sort {$a->{table} cmp $b->{table} || $a->{column} cmp $b->{column} }
+        @$column_info];
 }
 
 sub insert {
@@ -989,6 +1052,7 @@ sub type_rule {
         # Into
         foreach my $i (1 .. 2) {
             my $into = "into$i";
+            my $exists_into = exists $type_rule->{$into};
             $type_rule->{$into} = _array_to_hash($type_rule->{$into});
             $self->{type_rule} = $type_rule;
             $self->{"_$into"} = {};
@@ -996,6 +1060,7 @@ sub type_rule {
                 croak qq{type name of $into section must be lower case}
                   if $type_name =~ /[A-Z]/;
             }
+            
             $self->each_column(sub {
                 my ($dbi, $table, $column, $column_info) = @_;
                 
@@ -1281,16 +1346,18 @@ sub _connect {
     warn "dbi_options is DEPRECATED! use dbi_option instead\n"
       if keys %{$self->dbi_options};
     
+    $dbi_option = {%{$self->default_dbi_option}, %$dbi_option};
+    
     # Connect
-    my $dbh = eval {DBI->connect(
-        $dsn,
-        $user,
-        $password,
-        {
-            %{$self->default_dbi_option},
-            %$dbi_option
-        }
-    )};
+    my $dbh;
+    eval {
+        $dbh = DBI->connect(
+            $dsn,
+            $user,
+            $password,
+            $dbi_option
+        );
+    };
     
     # Connect error
     croak "$@ " . _subname if $@;
@@ -1961,13 +2028,23 @@ This is L<DBIx::Connector> example. Please pass
 C<default_dbi_option> to L<DBIx::Connector> C<new> method.
 
     my $connector = DBIx::Connector->new(
-        "dbi:mysql:database=$DATABASE",
-        $USER,
-        $PASSWORD,
+        "dbi:mysql:database=$database",
+        $user,
+        $password,
         DBIx::Custom->new->default_dbi_option
     );
     
     my $dbi = DBIx::Custom->connect(connector => $connector);
+
+If C<connector> is set to 1 when connect method is called,
+L<DBIx::Connector> is automatically set to C<connector>
+
+    my $dbi = DBIx::Custom->connect(
+      dsn => $dsn, user => $user, password => $password, connector => 1);
+    
+    my $connector = $dbi->connector; # DBIx::Connector
+
+Note that L<DBIx::Connector> must be installed.
 
 =head2 C<dsn>
 
@@ -2095,6 +2172,47 @@ If you want to disable tag parsing functionality, set to 0.
 
 User name, used when C<connect> method is executed.
 
+=head2 C<user_column_info EXPERIMENTAL>
+
+    my $user_column_info = $dbi->user_column_info;
+    $dbi = $dbi->user_column_info($user_column_info);
+
+You can set the following data.
+
+    [
+        {table => 'book', column => 'title', info => {...}},
+        {table => 'author', column => 'name', info => {...}}
+    ]
+
+Usually, you can set return value of C<get_column_info>.
+
+    my $user_column_info
+      = $dbi->get_column_info(exclude_table => qr/^system/);
+    $dbi->user_column_info($user_column_info);
+
+If C<user_column_info> is set, C<each_column> use C<user_column_info>
+to find column info.
+
+=head2 C<user_table_info EXPERIMENTAL>
+
+    my $user_table_info = $dbi->user_table_info;
+    $dbi = $dbi->user_table_info($user_table_info);
+
+You can set the following data.
+
+    [
+        {table => 'book', info => {...}},
+        {table => 'author', info => {...}}
+    ]
+
+Usually, you can set return value of C<get_table_info>.
+
+    my $user_table_info = $dbi->get_table_info(exclude => qr/^system/);
+    $dbi->user_table_info($user_table_info);
+
+If C<user_table_info> is set, C<each_table> use C<user_table_info>
+to find table info.
+
 =head1 METHODS
 
 L<DBIx::Custom> inherits all methods from L<Object::Simple>
@@ -2184,6 +2302,101 @@ the module is also used from C<model> method.
 
 Get L<DBI> database handle. if C<connector> is set, you can get
 database handle through C<connector> object.
+
+=head2 C<delete>
+
+    $dbi->delete(table => 'book', where => {title => 'Perl'});
+
+Execute delete statement.
+
+The following opitons are available.
+
+=over 4
+
+=item C<append>
+
+Same as C<select> method's C<append> option.
+
+=item C<filter>
+
+Same as C<execute> method's C<filter> option.
+
+=item C<id>
+
+    id => 4
+    id => [4, 5]
+
+ID corresponding to C<primary_key>.
+You can delete rows by C<id> and C<primary_key>.
+
+    $dbi->delete(
+        parimary_key => ['id1', 'id2'],
+        id => [4, 5],
+        table => 'book',
+    );
+
+The above is same as the followin one.
+
+    $dbi->delete(where => {id1 => 4, id2 => 5}, table => 'book');
+
+=item C<prefix>
+
+    prefix => 'some'
+
+prefix before table name section.
+
+    delete some from book
+
+=item C<query>
+
+Same as C<execute> method's C<query> option.
+
+=item C<sqlfilter EXPERIMENTAL>
+
+Same as C<execute> method's C<sqlfilter> option.
+
+=item C<table>
+
+    table => 'book'
+
+Table name.
+
+=item C<where>
+
+Same as C<select> method's C<where> option.
+
+=item C<primary_key>
+
+See C<id> option.
+
+=item C<bind_type>
+
+Same as C<execute> method's C<bind_type> option.
+
+=item C<type_rule_off> EXPERIMENTAL
+
+Same as C<execute> method's C<type_rule_off> option.
+
+=item C<type_rule1_off> EXPERIMENTAL
+
+    type_rule1_off => 1
+
+Same as C<execute> method's C<type_rule1_off> option.
+
+=item C<type_rule2_off> EXPERIMENTAL
+
+    type_rule2_off => 1
+
+Same as C<execute> method's C<type_rule2_off> option.
+
+=back
+
+=head2 C<delete_all>
+
+    $dbi->delete_all(table => $table);
+
+Execute delete statement for all rows.
+Options is same as C<delete>.
 
 =head2 C<each_column>
 
@@ -2402,100 +2615,29 @@ Turn C<into2> type rule off.
 
 =back
 
-=head2 C<delete>
+=head2 C<get_column_info EXPERIMENTAL>
 
-    $dbi->delete(table => 'book', where => {title => 'Perl'});
+    my $tables = $self->get_column_info(exclude_table => qr/^system_/);
 
-Execute delete statement.
+get column infomation except for one which match C<exclude_table> pattern.
 
-The following opitons are available.
+    [
+        {table => 'book', column => 'title', info => {...}},
+        {table => 'author', column => 'name' info => {...}}
+    ]
 
-=over 4
+=head2 C<get_table_info EXPERIMENTAL>
 
-=item C<append>
+    my $tables = $self->get_table_info(exclude => qr/^system_/);
 
-Same as C<select> method's C<append> option.
+get table infomation except for one which match C<exclude> pattern.
 
-=item C<filter>
+    [
+        {table => 'book', info => {...}},
+        {table => 'author', info => {...}}
+    ]
 
-Same as C<execute> method's C<filter> option.
-
-=item C<id>
-
-    id => 4
-    id => [4, 5]
-
-ID corresponding to C<primary_key>.
-You can delete rows by C<id> and C<primary_key>.
-
-    $dbi->delete(
-        parimary_key => ['id1', 'id2'],
-        id => [4, 5],
-        table => 'book',
-    );
-
-The above is same as the followin one.
-
-    $dbi->delete(where => {id1 => 4, id2 => 5}, table => 'book');
-
-=item C<prefix>
-
-    prefix => 'some'
-
-prefix before table name section.
-
-    delete some from book
-
-=item C<query>
-
-Same as C<execute> method's C<query> option.
-
-=item C<sqlfilter EXPERIMENTAL>
-
-Same as C<execute> method's C<sqlfilter> option.
-
-=item C<table>
-
-    table => 'book'
-
-Table name.
-
-=item C<where>
-
-Same as C<select> method's C<where> option.
-
-=item C<primary_key>
-
-See C<id> option.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
-
-=item C<type_rule_off> EXPERIMENTAL
-
-Same as C<execute> method's C<type_rule_off> option.
-
-=item C<type_rule1_off> EXPERIMENTAL
-
-    type_rule1_off => 1
-
-Same as C<execute> method's C<type_rule1_off> option.
-
-=item C<type_rule2_off> EXPERIMENTAL
-
-    type_rule2_off => 1
-
-Same as C<execute> method's C<type_rule2_off> option.
-
-=back
-
-=head2 C<delete_all>
-
-    $dbi->delete_all(table => $table);
-
-Execute delete statement for all rows.
-Options is same as C<delete>.
+You can set this value to C<user_table_info>.
 
 =head2 C<insert>
 

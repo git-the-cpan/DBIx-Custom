@@ -76,6 +76,8 @@ my $update_param;
 my $insert_param;
 my $join;
 my $binary;
+my $user_table_info;
+my $user_column_info;
 
 require MyDBI1;
 {
@@ -233,164 +235,15 @@ require MyDBI1;
     }
 }
 
-test 'join';
+# Get user table info
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
-$dbi->execute($create_table1);
-$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
-$dbi->insert(table => $table1, param => {$key1 => 3, $key2 => 4});
 eval { $dbi->execute("drop table $table2") };
-$dbi->execute($create_table2);
-$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
 eval { $dbi->execute("drop table $table3") };
-$dbi->execute("create table $table3 ($key3 int, $key4 int)");
-$dbi->insert(table => $table3, param => {$key3 => 5, $key4 => 4});
-$rows = $dbi->select(
-    table => $table1,
-    column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
-    where   => {"$table1.$key2" => 2},
-    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
-)->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
-
-$rows = $dbi->select(
-    table => $table1,
-    where   => {$key1 => 1},
-    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
-)->all;
-is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
-
-eval {
-    $rows = $dbi->select(
-        table => $table1,
-        column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
-        where   => {"$table1.$key2" => 2},
-        join  => {"$table1.$key1" => "$table2.$key1"}
-    );
-};
-like ($@, qr/array/);
-
-$rows = $dbi->select(
-    table => $table1,
-    where   => {$key1 => 1},
-    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
-              "left outer join $table3 on $table2.$key3 = $table3.$key3"]
-)->all;
-is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
-
-$rows = $dbi->select(
-    column => "$table3.$key4 as ${table3}__$key4",
-    table => $table1,
-    where   => {"$table1.$key1" => 1},
-    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
-              "left outer join $table3 on $table2.$key3 = $table3.$key3"]
-)->all;
-is_deeply($rows, [{"${table3}__$key4" => 4}]);
-
-$rows = $dbi->select(
-    column => "$table1.$key1 as ${table1}__$key1",
-    table => $table1,
-    where   => {"$table3.$key4" => 4},
-    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
-              "left outer join $table3 on $table2.$key3 = $table3.$key3"]
-)->all;
-is_deeply($rows, [{"${table1}__$key1" => 1}]);
-
-$dbi = DBIx::Custom->connect;
-eval { $dbi->execute("drop table $table1") };
-$dbi->execute($create_table1);
-$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
-eval { $dbi->execute("drop table $table2") };
-$dbi->execute($create_table2);
-$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
-$rows = $dbi->select(
-    table => $table1,
-    column => "${q}$table1$p.${q}$key1$p as ${q}${table1}_$key1$p, ${q}$table2$p.${q}$key1$p as ${q}${table2}_$key1$p, ${q}$key2$p, ${q}$key3$p",
-    where   => {"$table1.$key2" => 2},
-    join  => ["left outer join ${q}$table2$p on ${q}$table1$p.${q}$key1$p = ${q}$table2$p.${q}$key1$p"],
-)->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}],
-          'quote');
-
-
-$dbi = DBIx::Custom->connect;
-eval { $dbi->execute("drop table $table1") };
-$dbi->execute($create_table1);
-$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
-$sql = <<"EOS";
-left outer join (
-  select * from $table1 t1
-  where t1.$key2 = (
-    select max(t2.$key2) from $table1 t2
-    where t1.$key1 = t2.$key1
-  )
-) $table3 on $table1.$key1 = $table3.$key1
-EOS
-$join = [$sql];
-$rows = $dbi->select(
-    table => $table1,
-    column => "$table3.$key1 as ${table3}__$key1",
-    join  => $join
-)->all;
-$DB::single = 1;
-is_deeply($rows, [{"${table3}__$key1" => 1}]);
-
-$dbi = DBIx::Custom->connect;
-eval { $dbi->execute("drop table $table1") };
-eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
 $dbi->execute($create_table2);
-$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
-$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 4});
-$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
-$result = $dbi->select(
-    table => $table1,
-    join => [
-        "left outer join $table2 on $table2.$key2 = '4' and $table1.$key1 = $table2.$key1"
-    ]
-);
-is_deeply($result->all, [{$key1 => 1, $key2 => 2}]);
-$result = $dbi->select(
-    table => $table1,
-    column => [{$table2 => [$key3]}],
-    join => [
-        "left outer join $table2 on $table2.$key3 = '4' and $table1.$key1 = $table2.$key1"
-    ]
-);
-is_deeply($result->all, [{"$table2.$key3" => 4}]);
-$result = $dbi->select(
-    table => $table1,
-    column => [{$table2 => [$key3]}],
-    join => [
-        "left outer join $table2 on $table1.$key1 = $table2.$key1 and $table2.$key3 = '4'"
-    ]
-);
-is_deeply($result->all, [{"$table2.$key3" => 4}]);
-
-$dbi = DBIx::Custom->connect;
-eval { $dbi->execute("drop table $table1") };
-eval { $dbi->execute("drop table $table2") };
-$dbi->execute($create_table1);
-$dbi->execute($create_table2);
-$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
-$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 4});
-$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
-$result = $dbi->select(
-    table => $table1,
-    column => [{$table2 => [$key3]}],
-    join => [
-        {
-            clause => "left outer join $table2 on $table2.$key3 = '4' and $table1.$key1 = $table2.$key1",
-            table => [$table1, $table2]
-        }
-    ]
-);
-is_deeply($result->all, [{"$table2.$key3" => 4}]);
-
-test 'columns';
-$DB::single = 1;
-$dbi = MyDBI1->connect;
-$model = $dbi->model($table1);
+$dbi->execute($create_table3);
+$user_table_info = $dbi->get_table_info(exclude => $dbi->exclude_table);
 
 # Create table
 $dbi = DBIx::Custom->connect;
@@ -2186,6 +2039,7 @@ is($row->{$key3}, 3);
 
 test 'mycolumn and column';
 $dbi = MyDBI7->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
@@ -2232,6 +2086,7 @@ like($@, qr/not safety/);
 
 test 'mycolumn';
 $dbi = MyDBI8->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
@@ -2624,6 +2479,7 @@ is($row->{$key3}, 3);
 
 test 'column separator is default .';
 $dbi = MyDBI7->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
@@ -2648,6 +2504,7 @@ is_deeply($result->one,
 
 test 'separator';
 $dbi = DBIx::Custom->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
@@ -2707,6 +2564,7 @@ is_deeply($model2->select->one, {$key1 => 1, $key3 => 3});
 
 test 'filter_off';
 $dbi = DBIx::Custom->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
@@ -3124,6 +2982,7 @@ like($@, qr/array/);
 
 test 'select() sqlfilter option';
 $dbi = DBIx::Custom->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
 $dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
@@ -3150,6 +3009,7 @@ ok(!$@);
 
 test 'column table option';
 $dbi = MyDBI9->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
 eval { $dbi->execute("drop table $table2") };
@@ -3189,6 +3049,7 @@ is_deeply($result->one,
 
 test 'create_model';
 $dbi = DBIx::Custom->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 $dbi->execute($create_table1);
@@ -3370,6 +3231,7 @@ is_deeply($model->columns, [$key1, $key2]);
 
 test 'setup_model';
 $dbi = MyDBI1->connect;
+$dbi->user_table_info($user_table_info);
 eval { $dbi->execute("drop table $table1") };
 eval { $dbi->execute("drop table $table2") };
 
@@ -3407,6 +3269,7 @@ is_deeply($infos,
     ]
     
 );
+
 test 'each_table';
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
@@ -3431,13 +3294,42 @@ is_deeply($infos,
     ]
 );
 
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table2);
+$dbi->execute($create_table1_type);
+
+$infos = [];
+$dbi->user_table_info($user_table_info);
+$dbi->each_table(sub {
+    my ($self, $table, $table_info) = @_;
+    
+    if ($table =~ /^table\d/i) {
+         my $info = [$table, $table_info->{TABLE_NAME}];
+         push @$infos, $info;
+    }
+});
+$infos = [sort { $a->[0] cmp $b->[0] || $a->[1] cmp $b->[1] } @$infos];
+is_deeply($infos, 
+    [
+        [$table1, $table1],
+        [$table2, $table2],
+        [$table3, $table3],
+    ]
+);
+
 test 'type_rule into';
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$user_column_info = $dbi->get_column_info(exclude_table => $dbi->exclude_table);
+
+
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
 
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => {
         $date_typename => sub { '2010-' . $_[0] }
@@ -3450,6 +3342,7 @@ like($result->one->{$key1}, qr/^2010-01-01/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => [
          [$date_typename, $datetime_typename] => sub {
@@ -3469,6 +3362,7 @@ $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
 $dbi->insert({$key1 => '2010-01-03', $key2 => '2010-01-01 01:01:03'}, table => $table1);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => [
         [$date_typename, $datetime_typename] => sub {
@@ -3490,6 +3384,7 @@ $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
 $dbi->insert({$key1 => '2010-01-03', $key2 => '2010-01-01 01:01:03'}, table => $table1);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => [
         [$date_typename, $datetime_typename] => sub {
@@ -3516,6 +3411,7 @@ $dbi->register_filter(convert => sub {
     $value =~ s/02/03/;
     return $value;
 });
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => 'convert',
@@ -3532,6 +3428,7 @@ test 'type_rule and filter order';
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => {
         $date_typename => sub { my $v = shift || ''; $v =~ s/4/5/; return $v }
@@ -3556,6 +3453,7 @@ like($result->fetch_first->[0], qr/^2010-01-09/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/4/; return $v }
@@ -3566,6 +3464,7 @@ $dbi->type_rule(
 );
 $dbi->insert({$key1 => '2010-01-03'}, table => $table1);
 $result = $dbi->select(table => $table1);
+$dbi->user_column_info($user_column_info);
 $result->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/6/; return $v }
@@ -3581,6 +3480,7 @@ test 'type_rule_off';
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/5/; return $v }
@@ -3596,6 +3496,7 @@ like($result->type_rule_off->fetch->[0], qr/^2010-01-03/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/4/; return $v }
@@ -3611,6 +3512,7 @@ like($result->one->{$key1}, qr/^2010-01-04/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/4/5/; return $v }
@@ -3626,6 +3528,7 @@ like($result->one->{$key1}, qr/^2010-01-05/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/4/5/; return $v }
@@ -3642,6 +3545,7 @@ $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
 $dbi->register_filter(ppp => sub { my $v = shift || ''; $v =~ s/3/4/; return $v });
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => {
         $date_typename => 'ppp'
@@ -3682,6 +3586,7 @@ like($@, qr/lower/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/4/5/; return $v }
@@ -3698,6 +3603,7 @@ like($result->one->{$key1}, qr/^2010-01-04/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/4/; return $v },
@@ -3763,6 +3669,7 @@ like($row->{$key2}, qr/^2010-01-01 01:01:03/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/4/; return $v },
@@ -3776,6 +3683,7 @@ like($result->one->{$key1}, qr/^2010-01-05/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     from1 => {
         $date_datatype => sub { my $v = shift || ''; $v =~ s/3/4/; return $v }
@@ -3789,6 +3697,7 @@ like($result->fetch->[0], qr/^2010-01-05/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => {
         $date_typename => sub { my $v = shift || ''; $v =~ s/3/4/; return $v }
@@ -3812,6 +3721,7 @@ like($result->type_rule_on->fetch_first->[0], qr/^2010-01-07/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => {
         $date_typename => sub { my $v = shift || ''; $v =~ s/3/4/; return $v }
@@ -3835,6 +3745,7 @@ like($result->type_rule1_on->fetch_first->[0], qr/^2010-01-07/);
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1_type);
+$dbi->user_column_info($user_column_info);
 $dbi->type_rule(
     into1 => {
         $date_typename => sub { my $v = shift || ''; $v =~ s/3/5/; return $v }
@@ -3854,6 +3765,163 @@ $result = $dbi->select(table => $table1);
 like($result->type_rule2_off->fetch_first->[0], qr/^2010-01-06/);
 $result = $dbi->select(table => $table1);
 like($result->type_rule2_on->fetch_first->[0], qr/^2010-01-07/);
+
+test 'join';
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->insert(table => $table1, param => {$key1 => 3, $key2 => 4});
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table2);
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
+eval { $dbi->execute("drop table $table3") };
+$dbi->execute("create table $table3 ($key3 int, $key4 int)");
+$dbi->insert(table => $table3, param => {$key3 => 5, $key4 => 4});
+$rows = $dbi->select(
+    table => $table1,
+    column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
+    where   => {"$table1.$key2" => 2},
+    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
+)->all;
+is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
+
+$rows = $dbi->select(
+    table => $table1,
+    where   => {$key1 => 1},
+    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
+)->all;
+is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
+
+eval {
+    $rows = $dbi->select(
+        table => $table1,
+        column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
+        where   => {"$table1.$key2" => 2},
+        join  => {"$table1.$key1" => "$table2.$key1"}
+    );
+};
+like ($@, qr/array/);
+
+$rows = $dbi->select(
+    table => $table1,
+    where   => {$key1 => 1},
+    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
+              "left outer join $table3 on $table2.$key3 = $table3.$key3"]
+)->all;
+is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
+
+$rows = $dbi->select(
+    column => "$table3.$key4 as ${table3}__$key4",
+    table => $table1,
+    where   => {"$table1.$key1" => 1},
+    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
+              "left outer join $table3 on $table2.$key3 = $table3.$key3"]
+)->all;
+is_deeply($rows, [{"${table3}__$key4" => 4}]);
+
+$rows = $dbi->select(
+    column => "$table1.$key1 as ${table1}__$key1",
+    table => $table1,
+    where   => {"$table3.$key4" => 4},
+    join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
+              "left outer join $table3 on $table2.$key3 = $table3.$key3"]
+)->all;
+is_deeply($rows, [{"${table1}__$key1" => 1}]);
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table2);
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
+$rows = $dbi->select(
+    table => $table1,
+    column => "${q}$table1$p.${q}$key1$p as ${q}${table1}_$key1$p, ${q}$table2$p.${q}$key1$p as ${q}${table2}_$key1$p, ${q}$key2$p, ${q}$key3$p",
+    where   => {"$table1.$key2" => 2},
+    join  => ["left outer join ${q}$table2$p on ${q}$table1$p.${q}$key1$p = ${q}$table2$p.${q}$key1$p"],
+)->all;
+is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}],
+          'quote');
+
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$sql = <<"EOS";
+left outer join (
+  select * from $table1 t1
+  where t1.$key2 = (
+    select max(t2.$key2) from $table1 t2
+    where t1.$key1 = t2.$key1
+  )
+) $table3 on $table1.$key1 = $table3.$key1
+EOS
+$join = [$sql];
+$rows = $dbi->select(
+    table => $table1,
+    column => "$table3.$key1 as ${table3}__$key1",
+    join  => $join
+)->all;
+is_deeply($rows, [{"${table3}__$key1" => 1}]);
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table1);
+$dbi->execute($create_table2);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 4});
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
+$result = $dbi->select(
+    table => $table1,
+    join => [
+        "left outer join $table2 on $table2.$key2 = '4' and $table1.$key1 = $table2.$key1"
+    ]
+);
+is_deeply($result->all, [{$key1 => 1, $key2 => 2}]);
+$result = $dbi->select(
+    table => $table1,
+    column => [{$table2 => [$key3]}],
+    join => [
+        "left outer join $table2 on $table2.$key3 = '4' and $table1.$key1 = $table2.$key1"
+    ]
+);
+is_deeply($result->all, [{"$table2.$key3" => 4}]);
+$result = $dbi->select(
+    table => $table1,
+    column => [{$table2 => [$key3]}],
+    join => [
+        "left outer join $table2 on $table1.$key1 = $table2.$key1 and $table2.$key3 = '4'"
+    ]
+);
+is_deeply($result->all, [{"$table2.$key3" => 4}]);
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table1);
+$dbi->execute($create_table2);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 4});
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
+$result = $dbi->select(
+    table => $table1,
+    column => [{$table2 => [$key3]}],
+    join => [
+        {
+            clause => "left outer join $table2 on $table2.$key3 = '4' and $table1.$key1 = $table2.$key1",
+            table => [$table1, $table2]
+        }
+    ]
+);
+is_deeply($result->all, [{"$table2.$key3" => 4}]);
+
+test 'columns';
+$dbi = MyDBI1->connect;
+$model = $dbi->model($table1);
 
 
 1;
