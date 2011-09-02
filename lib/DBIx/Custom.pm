@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1721';
+our $VERSION = '0.1722';
 use 5.008001;
 
 use Carp 'croak';
@@ -65,7 +65,8 @@ has [qw/connector dsn password quote user exclude_table user_table_info
     safety_character => '\w',
     separator => '.',
     stash => sub { {} },
-    tag_parse => 1;
+    tag_parse => 1,
+    timestamp => sub { {} };
 
 sub available_datatype {
     my $self = shift;
@@ -120,7 +121,9 @@ sub AUTOLOAD {
 }
 
 sub assign_param {
-    my ($self, $param) = @_;
+    my ($self, $param, $opts) = @_;
+    
+    my $wrap = $opts->{wrap} || {};
     
     # Create set tag
     my @params;
@@ -130,10 +133,10 @@ sub assign_param {
           unless $column =~ /^[$safety\.]+$/;
         my $column_quote = $self->_q($column);
         $column_quote =~ s/\./$self->_q(".")/e;
-        push @params, ref $param->{$column} eq 'SCALAR'
-          ? "$column_quote = " . ${$param->{$column}}
-          : "$column_quote = :$column";
-
+        my $func = $wrap->{$column} || sub { $_[0] };
+        push @params,
+          ref $param->{$column} eq 'SCALAR' ? "$column_quote = " . ${$param->{$column}}
+        : "$column_quote = " . $func->(":$column");
     }
     my $tag = join(', ', @params);
     
@@ -372,8 +375,8 @@ sub each_table {
 
 our %VALID_ARGS = map { $_ => 1 } qw/append allow_delete_all
   allow_update_all bind_type column filter id join param prefix primary_key
-  query relation sqlfilter table table_alias type type_rule_off type_rule1_off
-  type_rule2_off wrap/;
+  query relation sqlfilter table table_alias timestamp type type_rule_off
+  type_rule1_off type_rule2_off wrap/;
 
 sub execute {
     my $self = shift;
@@ -611,6 +614,20 @@ sub insert {
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
     my $prefix = delete $args{prefix};
+    my $wrap = delete $args{wrap};
+    my $timestamp = $args{timestamp};
+    
+    # Timestamp
+    if ($timestamp) {
+        my $column = $self->timestamp->{insert}[0];
+        my $v   = $self->timestamp->{insert}[1];
+        my $value;
+        
+        if (defined $column && defined $v) {
+            $value = ref $v eq 'SCALAR' ? $v : \$v;
+            $param->{$column} = $value;
+        }
+    }
 
     # Merge parameter
     if (defined $id) {
@@ -622,7 +639,8 @@ sub insert {
     my @sql;
     push @sql, "insert";
     push @sql, $prefix if defined $prefix;
-    push @sql, "into " . $self->_q($table) . " " . $self->insert_param($param);
+    push @sql, "into " . $self->_q($table) . " "
+      . $self->insert_param($param, {wrap => $wrap});
     push @sql, $append if defined $append;
     my $sql = join (' ', @sql);
     
@@ -631,7 +649,9 @@ sub insert {
 }
 
 sub insert_param {
-    my ($self, $param) = @_;
+    my ($self, $param, $opts) = @_;
+    
+    my $wrap = $opts->{wrap} || {};
     
     # Create insert parameter tag
     my $safety = $self->safety_character;
@@ -643,8 +663,11 @@ sub insert_param {
         my $column_quote = $self->_q($column);
         $column_quote =~ s/\./$self->_q(".")/e;
         push @columns, $column_quote;
-        push @placeholders, ref $param->{$column} eq 'SCALAR'
-          ? ${$param->{$column}} : ":$column";
+        
+        my $func = $wrap->{$column} || sub { $_[0] };
+        push @placeholders,
+          ref $param->{$column} eq 'SCALAR' ? ${$param->{$column}}
+        : $func->(":$column");
     }
     
     return '(' . join(', ', @columns) . ') ' . 'values ' .
@@ -893,7 +916,6 @@ sub select {
     warn "select() param option is DEPRECATED!"
       if keys %$param;
     my $where_param = delete $args{where_param} || $param || {};
-    my $wrap = delete $args{wrap};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
     croak "update method primary_key option " .
@@ -987,14 +1009,6 @@ sub select {
     
     # Append
     push @sql, $append if defined $append;
-    
-    # Wrap
-    if ($wrap) {
-        croak "wrap option must be array refrence " . _subname
-          unless ref $wrap eq 'ARRAY';
-        unshift @sql, $wrap->[0];
-        push @sql, $wrap->[1];
-    }
     
     # SQL
     my $sql = join (' ', @sql);
@@ -1148,9 +1162,24 @@ sub update {
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
     my $prefix = delete $args{prefix};
+    my $wrap = delete $args{wrap};
+    my $timestamp = $args{timestamp};
+    
+    # Timestamp
+    if ($timestamp) {
+        my $column = $self->timestamp->{update}[0];
+        my $v   = $self->timestamp->{update}[1];
+        my $value;
+        
+        if (defined $column && defined $v) {
+            $value = ref $v eq 'SCALAR' ? $v : \$v;
+            $param->{$column} = $value;
+        }
+    }
+
 
     # Update clause
-    my $update_clause = $self->update_param($param);
+    my $update_clause = $self->update_param($param, {wrap => $wrap});
 
     # Where
     $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
@@ -1192,11 +1221,11 @@ sub update {
 sub update_all { shift->update(allow_update_all => 1, @_) };
 
 sub update_param {
-    my ($self, $param, $opt) = @_;
+    my ($self, $param, $opts) = @_;
     
     # Create update parameter tag
-    my $tag = $self->assign_param($param);
-    $tag = "set $tag" unless $opt->{no_set};
+    my $tag = $self->assign_param($param, $opts);
+    $tag = "set $tag" unless $opts->{no_set};
 
     return $tag;
 }
@@ -2184,6 +2213,27 @@ The performance is up.
 Enable DEPRECATED tag parsing functionality, default to 1.
 If you want to disable tag parsing functionality, set to 0.
 
+=head2 C<timestamp EXPERIMENTAL>
+
+    my $timestamp = $dbi->timestamp($timestamp);
+    $dbi = $dbi->timestamp;
+
+Timestamp information.
+
+    $dbi->timestamp({
+        insert => [created_at => 'NOW()'],
+        update => [updated_at => 'NOW()']
+    });
+
+This value is used when C<insert> or C<update> method's C<timestamp>
+option is specified.
+
+C<insert> is used by C<insert> method, and C<update> is
+used by C<update> method.
+
+Key, such as C<create_at> is column name.
+value such as C<NOW()> is DB function.
+
 =head2 C<user>
 
     my $user = $dbi->user;
@@ -2775,6 +2825,14 @@ Table name.
 
 Same as C<execute> method's C<type_rule_off> option.
 
+=item C<timestamp EXPERIMENTAL>
+
+    timestamp => 1
+
+If this value is set to 1,
+automatically created timestamp column is set based on
+C<timestamp> attribute's C<insert> value.
+
 =item C<type_rule1_off> EXPERIMENTAL
 
     type_rule1_off => 1
@@ -2786,6 +2844,21 @@ Same as C<execute> method's C<type_rule1_off> option.
     type_rule2_off => 1
 
 Same as C<execute> method's C<type_rule2_off> option.
+
+=item C<wrap EXPERIMENTAL>
+
+    wrap => {price => sub { "max($_[0])" }}
+
+placeholder wrapped string.
+
+If the following statement
+
+    $dbi->insert({price => 100}, table => 'book',
+      {price => sub { "$_[0] + 5" }});
+
+is executed, the following SQL is executed.
+
+    insert into book price values ( ? + 5 );
 
 =back
 
@@ -3269,14 +3342,6 @@ Same as C<execute> method's C<type_rule2_off> option.
 
 Where clause.
     
-=item C<wrap> EXPERIMENTAL
-
-Wrap statement. This is array reference.
-
-    wrap => ['select * from (', ') as t where ROWNUM < 10']
-
-This option is for Oracle and SQL Server paging process.
-
 =back
 
 =head2 C<update>
@@ -3358,6 +3423,14 @@ Same as C<execute> method's C<sqlfilter> option.
 
 Table name.
 
+=item C<timestamp EXPERIMENTAL>
+
+    timestamp => 1
+
+If this value is set to 1,
+automatically updated timestamp column is set based on
+C<timestamp> attribute's C<update> value.
+
 =item C<type_rule_off> EXPERIMENTAL
 
 Same as C<execute> method's C<type_rule_off> option.
@@ -3377,6 +3450,21 @@ Same as C<execute> method's C<type_rule2_off> option.
 =item C<where>
 
 Same as C<select> method's C<where> option.
+
+=item C<wrap EXPERIMENTAL>
+
+    wrap => {price => sub { "max($_[0])" }}
+
+placeholder wrapped string.
+
+If the following statement
+
+    $dbi->update({price => 100}, table => 'book',
+      {price => sub { "$_[0] + 5" }});
+
+is executed, the following SQL is executed.
+
+    update book set price =  ? + 5;
 
 =back
 
