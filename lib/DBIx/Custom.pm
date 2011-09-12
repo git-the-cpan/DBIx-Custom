@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1722';
+our $VERSION = '0.1723';
 use 5.008001;
 
 use Carp 'croak';
@@ -65,8 +65,7 @@ has [qw/connector dsn password quote user exclude_table user_table_info
     safety_character => '\w',
     separator => '.',
     stash => sub { {} },
-    tag_parse => 1,
-    timestamp => sub { {} };
+    tag_parse => 1;
 
 sub available_datatype {
     my $self = shift;
@@ -618,15 +617,12 @@ sub insert {
     my $timestamp = $args{timestamp};
     
     # Timestamp
-    if ($timestamp) {
-        my $column = $self->timestamp->{insert}[0];
-        my $v   = $self->timestamp->{insert}[1];
-        my $value;
-        
-        if (defined $column && defined $v) {
-            $value = ref $v eq 'SCALAR' ? $v : \$v;
-            $param->{$column} = $value;
-        }
+    if ($timestamp && (my $insert_timestamp = $self->insert_timestamp)) {
+        my $columns = $insert_timestamp->[0];
+        $columns = [$columns] unless ref $columns eq 'ARRAY';
+        my $value = $insert_timestamp->[1];
+        $value = $value->() if ref $value eq 'CODE';
+        $param->{$_} = $value for @$columns;
     }
 
     # Merge parameter
@@ -672,6 +668,17 @@ sub insert_param {
     
     return '(' . join(', ', @columns) . ') ' . 'values ' .
            '(' . join(', ', @placeholders) . ')'
+}
+
+sub insert_timestamp {
+    my $self = shift;
+    
+    if (@_) {
+        $self->{insert_timestamp} = [@_];
+        
+        return $self;
+    }
+    return $self->{insert_timestamp};
 }
 
 sub include_model {
@@ -742,48 +749,6 @@ sub include_model {
 sub mapper {
     my $self = shift;
     return DBIx::Custom::Mapper->new(@_);
-}
-
-sub map_param {
-    my $self = shift;
-    my $param = shift;
-    my %map = @_;
-    
-    # Mapping
-    my $map_param = {};
-    foreach my $key (keys %map) {
-        my $value_cb;
-        my $condition;
-        my $map_key;
-        
-        # Get mapping information
-        if (ref $map{$key} eq 'ARRAY') {
-            foreach my $some (@{$map{$key}}) {
-                $map_key = $some unless ref $some;
-                $condition = $some->{if} if ref $some eq 'HASH';
-                $value_cb = $some if ref $some eq 'CODE';
-            }
-        }
-        else {
-            $map_key = $map{$key};
-        }
-        $value_cb ||= sub { $_[0] };
-        $condition ||= sub { defined $_[0] && length $_[0] };
-
-        # Map parameter
-        my $value;
-        if (ref $condition eq 'CODE') {
-            $map_param->{$map_key} = $value_cb->($param->{$key})
-              if $condition->($param->{$key});
-        }
-        elsif ($condition eq 'exists') {
-            $map_param->{$map_key} = $value_cb->($param->{$key})
-              if exists $param->{$key};
-        }
-        else { croak qq/Condition must be code reference or "exists" / . _subname }
-    }
-    
-    return $map_param;
 }
 
 sub merge_param {
@@ -1166,17 +1131,13 @@ sub update {
     my $timestamp = $args{timestamp};
     
     # Timestamp
-    if ($timestamp) {
-        my $column = $self->timestamp->{update}[0];
-        my $v   = $self->timestamp->{update}[1];
-        my $value;
-        
-        if (defined $column && defined $v) {
-            $value = ref $v eq 'SCALAR' ? $v : \$v;
-            $param->{$column} = $value;
-        }
+    if ($timestamp && (my $update_timestamp = $self->update_timestamp)) {
+        my $columns = $update_timestamp->[0];
+        $columns = [$columns] unless ref $columns eq 'ARRAY';
+        my $value = $update_timestamp->[1];
+        $value = $value->() if ref $value eq 'CODE';
+        $param->{$_} = $value for @$columns;
     }
-
 
     # Update clause
     my $update_clause = $self->update_param($param, {wrap => $wrap});
@@ -1228,6 +1189,17 @@ sub update_param {
     $tag = "set $tag" unless $opts->{no_set};
 
     return $tag;
+}
+
+sub update_timestamp {
+    my $self = shift;
+    
+    if (@_) {
+        $self->{update_timestamp} = [@_];
+        
+        return $self;
+    }
+    return $self->{update_timestamp};
 }
 
 sub where { DBIx::Custom::Where->new(dbi => shift, @_) }
@@ -2040,11 +2012,11 @@ C<Microsoft SQL Server>, C<Microsoft Access>, C<DB2> or anything,
 
 =item *
 
-Filtering by data type or column name(EXPERIMENTAL)
+Filtering by data type or column name
 
 =item *
 
-Create C<order by> clause flexibly(EXPERIMENTAL)
+Create C<order by> clause flexibly
 
 =back
 
@@ -2193,7 +2165,7 @@ Note that you don't have to specify like '[\w]'.
 Separator whichi join table and column.
 This is used by C<column> and C<mycolumn> method.
 
-=head2 C<exclude_table EXPERIMENTAL>
+=head2 C<exclude_table>
 
     my $exclude_table = $self->exclude_table;
     $dbi = $self->exclude_table(qr/pg_/);
@@ -2213,27 +2185,6 @@ The performance is up.
 Enable DEPRECATED tag parsing functionality, default to 1.
 If you want to disable tag parsing functionality, set to 0.
 
-=head2 C<timestamp EXPERIMENTAL>
-
-    my $timestamp = $dbi->timestamp($timestamp);
-    $dbi = $dbi->timestamp;
-
-Timestamp information.
-
-    $dbi->timestamp({
-        insert => [created_at => 'NOW()'],
-        update => [updated_at => 'NOW()']
-    });
-
-This value is used when C<insert> or C<update> method's C<timestamp>
-option is specified.
-
-C<insert> is used by C<insert> method, and C<update> is
-used by C<update> method.
-
-Key, such as C<create_at> is column name.
-value such as C<NOW()> is DB function.
-
 =head2 C<user>
 
     my $user = $dbi->user;
@@ -2241,7 +2192,7 @@ value such as C<NOW()> is DB function.
 
 User name, used when C<connect> method is executed.
 
-=head2 C<user_column_info EXPERIMENTAL>
+=head2 C<user_column_info>
 
     my $user_column_info = $dbi->user_column_info;
     $dbi = $dbi->user_column_info($user_column_info);
@@ -2260,9 +2211,9 @@ Usually, you can set return value of C<get_column_info>.
     $dbi->user_column_info($user_column_info);
 
 If C<user_column_info> is set, C<each_column> use C<user_column_info>
-to find column info.
+to find column info. this is very fast.
 
-=head2 C<user_table_info EXPERIMENTAL>
+=head2 C<user_table_info>
 
     my $user_table_info = $dbi->user_table_info;
     $dbi = $dbi->user_table_info($user_table_info);
@@ -2288,21 +2239,21 @@ L<DBIx::Custom> inherits all methods from L<Object::Simple>
 and use all methods of L<DBI>
 and implements the following new ones.
 
-=head2 C<available_datatype> EXPERIMENTAL
+=head2 C<available_datatype>
 
     print $dbi->available_datatype;
 
 Get available data types. You can use these data types
 in C<type rule>'s C<from1> and C<from2> section.
 
-=head2 C<available_typename> EXPERIMENTAL
+=head2 C<available_typename>
 
     print $dbi->available_typename;
 
 Get available type names. You can use these type names in
 C<type_rule>'s C<into1> and C<into2> section.
 
-=head2 C<assign_param> EXPERIMENTAL
+=head2 C<assign_param>
 
     my $assign_param = $dbi->assign_param({title => 'a', age => 2});
 
@@ -2350,7 +2301,7 @@ L<DBIx::Custom> is a wrapper of L<DBI>.
 C<AutoCommit> and C<RaiseError> options are true, 
 and C<PrintError> option is false by default.
 
-=head2 C<count> EXPERIMENTAL
+=head2 C<count>
 
     my $count = $model->count(table => 'book');
 
@@ -2428,7 +2379,7 @@ prefix before table name section.
 
 Same as C<execute> method's C<query> option.
 
-=item C<sqlfilter EXPERIMENTAL>
+=item C<sqlfilter>
 
 Same as C<execute> method's C<sqlfilter> option.
 
@@ -2450,17 +2401,17 @@ See C<id> option.
 
 Same as C<execute> method's C<bind_type> option.
 
-=item C<type_rule_off> EXPERIMENTAL
+=item C<type_rule_off>
 
 Same as C<execute> method's C<type_rule_off> option.
 
-=item C<type_rule1_off> EXPERIMENTAL
+=item C<type_rule1_off>
 
     type_rule1_off => 1
 
 Same as C<execute> method's C<type_rule1_off> option.
 
-=item C<type_rule2_off> EXPERIMENTAL
+=item C<type_rule2_off>
 
     type_rule2_off => 1
 
@@ -2651,7 +2602,7 @@ and don't forget to sort $row values by $row key asc order.
 
 See C<id> option.
 
-=item C<sqlfilter EXPERIMENTAL> 
+=item C<sqlfilter> 
 
 SQL filter function.
 
@@ -2690,7 +2641,7 @@ You must set C<table> option.
       "select * from book where title = :book.title and author = :book.author",
       {title => 'Perl', author => 'Ken');
 
-=item C<table_alias> EXPERIMENTAL
+=item C<table_alias>
 
     table_alias => {user => 'hiker'}
 
@@ -2698,19 +2649,19 @@ Table alias. Key is real table name, value is alias table name.
 If you set C<table_alias>, you can enable C<into1> and C<into2> type rule
 on alias table name.
 
-=item C<type_rule_off> EXPERIMENTAL
+=item C<type_rule_off>
 
     type_rule_off => 1
 
 Turn C<into1> and C<into2> type rule off.
 
-=item C<type_rule1_off> EXPERIMENTAL
+=item C<type_rule1_off>
 
     type_rule1_off => 1
 
 Turn C<into1> type rule off.
 
-=item C<type_rule2_off> EXPERIMENTAL
+=item C<type_rule2_off>
 
     type_rule2_off => 1
 
@@ -2718,7 +2669,7 @@ Turn C<into2> type rule off.
 
 =back
 
-=head2 C<get_column_info EXPERIMENTAL>
+=head2 C<get_column_info>
 
     my $tables = $self->get_column_info(exclude_table => qr/^system_/);
 
@@ -2729,7 +2680,7 @@ get column infomation except for one which match C<exclude_table> pattern.
         {table => 'author', column => 'name' info => {...}}
     ]
 
-=head2 C<get_table_info EXPERIMENTAL>
+=head2 C<get_table_info>
 
     my $tables = $self->get_table_info(exclude => qr/^system_/);
 
@@ -2811,7 +2762,7 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
-=item C<sqlfilter EXPERIMENTAL>
+=item C<sqlfilter>
 
 Same as C<execute> method's C<sqlfilter> option.
 
@@ -2821,7 +2772,7 @@ Same as C<execute> method's C<sqlfilter> option.
 
 Table name.
 
-=item C<type_rule_off> EXPERIMENTAL
+=item C<type_rule_off>
 
 Same as C<execute> method's C<type_rule_off> option.
 
@@ -2833,19 +2784,19 @@ If this value is set to 1,
 automatically created timestamp column is set based on
 C<timestamp> attribute's C<insert> value.
 
-=item C<type_rule1_off> EXPERIMENTAL
+=item C<type_rule1_off>
 
     type_rule1_off => 1
 
 Same as C<execute> method's C<type_rule1_off> option.
 
-=item C<type_rule2_off> EXPERIMENTAL
+=item C<type_rule2_off>
 
     type_rule2_off => 1
 
 Same as C<execute> method's C<type_rule2_off> option.
 
-=item C<wrap EXPERIMENTAL>
+=item C<wrap>
 
     wrap => {price => sub { "max($_[0])" }}
 
@@ -2917,59 +2868,21 @@ You can get model object by C<model>.
 
 See L<DBIx::Custom::Model> to know model features.
 
-=head2 C<mapper EXPERIMETNAL>
+=head2 C<insert_timestamp EXPERIMENTAL>
+
+    $dbi->insert_timestamp(
+      [qw/created_at updated_at/] => sub { localtime });
+
+Parameter for timestamp columns when C<insert> method is executed
+with C<timestamp> option.
+
+If multiple column are specified, same value is used.
+
+=head2 C<mapper EXPERIMENTAL>
 
     my $mapper = $dbi->mapper(param => $param);
 
 Create a new L<DBIx::Custom::Mapper> object.
-
-=head2 C<map_param> EXPERIMENTAL
-
-    my $map_param = $dbi->map_param(
-        {id => 1, authro => 'Ken', price => 1900},
-        'id' => 'book.id',
-        'author' => ['book.author' => sub { '%' . $_[0] . '%' }],
-        'price' => [
-            'book.price', {if => sub { length $_[0] }}
-        ]
-    );
-
-Map paramters to other key and value. First argument is original
-parameter. this is hash reference. Rest argument is mapping.
-By default, Mapping is done if the value length is not zero.
-
-=over 4
-
-=item Key mapping
-
-    'id' => 'book.id'
-
-This is only key mapping. Value is same as original one.
-
-    (id => 1) is mapped to ('book.id' => 1) if value length is not zero.
-
-=item Key and value mapping
-
-    'author' => ['book.author' => sub { '%' . $_[0] . '%' }]
-
-This is key and value mapping. Frist element of array reference
-is mapped key name, second element is code reference to map the value.
-
-    (author => 'Ken') is mapped to ('book.author' => '%Ken%')
-      if value length is not zero.
-
-=item Condition
-
-    'price' => ['book.price', {if => 'exists'}]
-    'price' => ['book.price', sub { '%' . $_[0] . '%' }, {if => 'exists'}]
-    'price' => ['book.price', {if => sub { defined shift }}]
-
-If you need condition, you can sepecify it. this is code reference
-or 'exists'. By default, condition is the following one.
-
-    sub { defined $_[0] && length $_[0] }
-
-=back
 
 =head2 C<merge_param>
 
@@ -3032,7 +2945,7 @@ Create a new L<DBIx::Custom> object.
 DBIx::Custom::NotExists object, indicating the column is not exists.
 This is used by C<clause> of L<DBIx::Custom::Where> .
 
-=head2 C<order> EXPERIMENTAL
+=head2 C<order>
 
     my $order = $dbi->order;
 
@@ -3055,7 +2968,7 @@ Create a new L<DBIx::Custom::Order> object.
     
 Register filters, used by C<filter> option of many methods.
 
-=head2 C<type_rule> EXPERIMENTAL
+=head2 C<type_rule>
 
     $dbi->type_rule(
         into1 => {
@@ -3263,7 +3176,7 @@ the following SQL is created
     where company.name = ?;
 
 You can specify two table by yourself. This is useful when join parser can't parse
-the join clause correctly. This is EXPERIMENTAL.
+the join clause correctly.
 
     $dbi->select(
         table => 'book',
@@ -3288,7 +3201,7 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
-=item C<sqlfilter EXPERIMENTAL>
+=item C<sqlfilter>
 
 Same as C<execute> method's C<sqlfilter> option
 
@@ -3298,17 +3211,17 @@ Same as C<execute> method's C<sqlfilter> option
 
 Table name.
 
-=item C<type_rule_off> EXPERIMENTAL
+=item C<type_rule_off>
 
 Same as C<execute> method's C<type_rule_off> option.
 
-=item C<type_rule1_off> EXPERIMENTAL
+=item C<type_rule1_off>
 
     type_rule1_off => 1
 
 Same as C<execute> method's C<type_rule1_off> option.
 
-=item C<type_rule2_off> EXPERIMENTAL
+=item C<type_rule2_off>
 
     type_rule2_off => 1
 
@@ -3413,7 +3326,7 @@ Primary key. This is used by C<id> option.
 
 Same as C<execute> method's C<query> option.
 
-=item C<sqlfilter EXPERIMENTAL>
+=item C<sqlfilter>
 
 Same as C<execute> method's C<sqlfilter> option.
 
@@ -3431,17 +3344,17 @@ If this value is set to 1,
 automatically updated timestamp column is set based on
 C<timestamp> attribute's C<update> value.
 
-=item C<type_rule_off> EXPERIMENTAL
+=item C<type_rule_off>
 
 Same as C<execute> method's C<type_rule_off> option.
 
-=item C<type_rule1_off> EXPERIMENTAL
+=item C<type_rule1_off>
 
     type_rule1_off => 1
 
 Same as C<execute> method's C<type_rule1_off> option.
 
-=item C<type_rule2_off> EXPERIMENTAL
+=item C<type_rule2_off>
 
     type_rule2_off => 1
 
@@ -3451,7 +3364,7 @@ Same as C<execute> method's C<type_rule2_off> option.
 
 Same as C<select> method's C<where> option.
 
-=item C<wrap EXPERIMENTAL>
+=item C<wrap>
 
     wrap => {price => sub { "max($_[0])" }}
 
@@ -3483,6 +3396,13 @@ Create update parameter tag.
 
     set title = :title, author = :author
 
+=head2 C<update_timestamp EXPERIMENTAL>
+
+    $dbi->update_timestamp(updated_at => sub { localtime });
+
+Parameter for timestamp columns when C<update> method is executed
+with C<timestamp> option.
+
 =head2 C<where>
 
     my $where = $dbi->where(
@@ -3499,14 +3419,7 @@ Create a new L<DBIx::Custom::Where> object.
 Setup all model objects.
 C<columns> of model object is automatically set, parsing database information.
 
-=head1 ENVIRONMENTAL VARIABLES
-
-=head2 C<DBIX_CUSTOM_DEBUG>
-
-If environment variable C<DBIX_CUSTOM_DEBUG> is set to true,
-executed SQL and bind values are printed to STDERR.
-
-=head2 C<show_datatype EXPERIMENTAL>
+=head2 C<show_datatype>
 
     $dbi->show_datatype($table);
 
@@ -3518,13 +3431,13 @@ Show data type of the columns of specified table.
 
 This data type is used in C<type_rule>'s C<from1> and C<from2>.
 
-=head2 C<show_tables EXPERIMETNAL>
+=head2 C<show_tables>
 
     $dbi->show_tables;
 
 Show tables.
 
-=head2 C<show_typename EXPERIMENTAL>
+=head2 C<show_typename>
 
     $dbi->show_typename($table);
 
@@ -3535,6 +3448,13 @@ Show type name of the columns of specified table.
     issue_date: date
 
 This type name is used in C<type_rule>'s C<into1> and C<into2>.
+
+=head1 ENVIRONMENTAL VARIABLES
+
+=head2 C<DBIX_CUSTOM_DEBUG>
+
+If environment variable C<DBIX_CUSTOM_DEBUG> is set to true,
+executed SQL and bind values are printed to STDERR.
 
 =head2 C<DBIX_CUSTOM_DEBUG_ENCODING>
 

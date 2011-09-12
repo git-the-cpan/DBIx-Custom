@@ -508,13 +508,33 @@ is_deeply($rows, [{$key1 => 0, $key2 => 2}, {$key1 => 3, $key2 => 4}], "basic");
 
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
-$dbi->timestamp({
-    insert => [$key1 => '5']
-});
+$dbi->insert_timestamp(
+    $key1 => '5'
+);
 $dbi->insert(table => $table1, param => {$key2 => 2}, timestamp => 1);
 $result = $dbi->execute("select * from $table1");
 $rows   = $result->all;
 is_deeply($rows, [{$key1 => 5, $key2 => 2}], "basic");
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert_timestamp(
+    [$key1, $key2] => sub { 5 }
+);
+$dbi->insert(table => $table1, timestamp => 1);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 5, $key2 => 5}], "basic");
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert_timestamp(
+    [$key1, $key2] => sub { "" . DBIx::Custom->new }
+);
+$dbi->insert(table => $table1, timestamp => 1);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is($rows->[0]->{$key1}, $rows->[0]->{$key2});
 
 test 'update';
 eval { $dbi->execute("drop table $table1") };
@@ -665,14 +685,36 @@ is_deeply($rows, [{$key1 => 1, $key2 => 11, $key3 => 3, $key4 => 4, $key5 => 5},
 
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
-$dbi->timestamp({
-    update => [$key1 => '5']
-});
+$dbi->update_timestamp(
+    $key1 => '5'
+);
 $dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
 $dbi->update(table => $table1, timestamp => 1, where => {$key2 => 2});
 $result = $dbi->execute("select * from $table1");
 $rows   = $result->all;
 is_deeply($rows, [{$key1 => 5, $key2 => 2}], "basic");
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->update_timestamp(
+    [$key1, $key2] => sub { '5' }
+);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->update_all(table => $table1, timestamp => 1);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 5, $key2 => 5}], "basic");
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->update_timestamp(
+    [$key1, $key2] => sub { "" . DBIx::Custom->new }
+);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->update_all(table => $table1, timestamp => 1);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is($rows->[0]->{$key1}, $rows->[0]->{$key2});
 
 test 'update_all';
 eval { $dbi->execute("drop table $table1") };
@@ -1568,15 +1610,6 @@ $row = $result->all;
 is_deeply($row, [{$key1 => 1, $key2 => 2}]);
 
 $where = $dbi->where;
-$where->clause(['and', ":${key1}{=}"]);
-$where->param({$key1 => undef});
-$where->if('defined');
-$where->map;
-$result = $dbi->execute("select * from $table1 $where", {$key1 => 1});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}]);
-
-$where = $dbi->where;
 $where->clause(['or', ":${key1}{=}", ":${key1}{=}"]);
 $where->param({$key1 => [undef, undef]});
 $result = $dbi->execute("select * from $table1 $where", {$key1 => [1, 0]});
@@ -1585,133 +1618,6 @@ is_deeply($row, [{$key1 => 1, $key2 => 2}]);
 $result = $dbi->execute("select * from $table1 $where", {$key1 => [0, 1]});
 $row = $result->all;
 is_deeply($row, [{$key1 => 1, $key2 => 2}]);
-
-$where = $dbi->where;
-$where->clause(['and', ":${key1}{=}"]);
-$where->param({$key1 => [undef, undef]});
-$where->if('defined');
-$where->map;
-$result = $dbi->execute("select * from $table1 $where", {$key1 => [1, 0]});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}]);
-$result = $dbi->execute("select * from $table1 $where", {$key1 => [0, 1]});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}]);
-
-$where = $dbi->where;
-$where->clause(['and', ":${key1}{=}"]);
-$where->param({$key1 => 0});
-$where->if('length');
-$where->map;
-$result = $dbi->execute("select * from $table1 $where", {$key1 => 1});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}]);
-
-$where = $dbi->where;
-$where->clause(['and', ":${key1}{=}"]);
-$where->param({$key1 => ''});
-$where->if('length');
-$where->map;
-$result = $dbi->execute("select * from $table1 $where", {$key1 => 1});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}]);
-
-$where = $dbi->where;
-$where->clause(['and', ":${key1}{=}"]);
-$where->param({$key1 => 5});
-$where->if(sub { ($_[0] || '') eq 5 });
-$where->map;
-$result = $dbi->execute("select * from $table1 $where", {$key1 => 1});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}]);
-
-$where = $dbi->where;
-$where->clause(['and', ":${key1}{=}"]);
-$where->param({$key1 => 7});
-$where->if(sub { ($_[0] || '') eq 5 });
-$where->map;
-$result = $dbi->execute("select * from $table1 $where", {$key1 => 1});
-$row = $result->all;
-is_deeply($row, [{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}]);
-
-$where = $dbi->where;
-$where->param({id => 1, author => 'Ken', price => 1900});
-$where->map(id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", {if => sub { $_[0] eq 1900 }}]
-);
-is_deeply($where->param, {"$table1.id" => 1, "$table1.author" => '%Ken%',
-  "$table1.price" => 1900});
-
-$where = $dbi->where;
-$where->param({id => 0, author => 0, price => 0});
-$where->map(
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", sub { '%' . $_[0] . '%' },
-      {if => sub { $_[0] eq 0 }}]
-);
-is_deeply($where->param, {"$table1.id" => 0, "$table1.author" => '%0%', "$table1.price" => '%0%'});
-
-$where = $dbi->where;
-$where->param({id => '', author => '', price => ''});
-$where->if('length');
-$where->map(
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", sub { '%' . $_[0] . '%' },
-      {if => sub { $_[0] eq 1 }}]
-);
-is_deeply($where->param, {});
-
-$where = $dbi->where;
-$where->param({id => undef, author => undef, price => undef});
-$where->if('length');
-$where->map(
-    id => "$table1.id",
-    price => ["$table1.price", {if => 'exists'}]
-);
-is_deeply($where->param, {"$table1.price" => undef});
-
-$where = $dbi->where;
-$where->param({price => 'a'});
-$where->if('length');
-$where->map(
-    id => ["$table1.id", {if => 'exists'}],
-    price => ["$table1.price", sub { '%' . $_[0] }, {if => 'exists'}]
-);
-is_deeply($where->param, {"$table1.price" => '%a'});
-
-$where = $dbi->where;
-$where->param({id => [1, 2], author => 'Ken', price => 1900});
-$where->map(
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", {if => sub { $_[0] eq 1900 }}]
-);
-is_deeply($where->param, {"$table1.id" => [1, 2], "$table1.author" => '%Ken%',
-  "$table1.price" => 1900});
-
-$where = $dbi->where;
-$where->if('length');
-$where->param({id => ['', ''], author => 'Ken', price => 1900});
-$where->map(
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", {if => sub { $_[0] eq 1900 }}]
-);
-is_deeply($where->param, {"$table1.id" => [$dbi->not_exists, $dbi->not_exists], "$table1.author" => '%Ken%',
-  "$table1.price" => 1900});
-
-$where = $dbi->where;
-$where->param({id => ['', ''], author => 'Ken', price => 1900});
-$where->map(
-    id => ["$table1.id", {if => 'length'}],
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }, {if => 'defined'}],
-    price => ["$table1.price", {if => sub { $_[0] eq 1900 }}]
-);
-is_deeply($where->param, {"$table1.id" => [$dbi->not_exists, $dbi->not_exists], "$table1.author" => '%Ken%',
-  "$table1.price" => 1900});
 
 test 'register_tag_processor';
 $dbi = DBIx::Custom->connect;
@@ -2830,49 +2736,6 @@ $where = $dbi->where;
 $param = $dbi->mapper(param => {id => 'a', author => 'b', price => 'c'}, pass => [qw/id author/])
   ->map(price => 'book.price');
 is_deeply($param, {id => 'a', author => 'b', 'book.price' => 'c'});
-
-test 'map_param';
-$dbi = DBIx::Custom->connect;
-$param = $dbi->map_param(
-    {id => 1, author => 'Ken', price => 1900},
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", {if => sub { $_[0] eq 1900 }}]
-);
-is_deeply($param, {"$table1.id" => 1, "$table1.author" => '%Ken%',
-  "$table1.price" => 1900});
-
-$param = $dbi->map_param(
-    {id => 0, author => 0, price => 0},
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", sub { '%' . $_[0] . '%' },
-      {if => sub { $_[0] eq 0 }}]
-);
-is_deeply($param, {"$table1.id" => 0, "$table1.author" => '%0%', "$table1.price" => '%0%'});
-
-$param = $dbi->map_param(
-    {id => '', author => '', price => ''},
-    id => "$table1.id",
-    author => ["$table1.author", sub { '%' . $_[0] . '%' }],
-    price => ["$table1.price", sub { '%' . $_[0] . '%' },
-      {if => sub { $_[0] eq 1 }}]
-);
-is_deeply($param, {});
-
-$param = $dbi->map_param(
-    {id => undef, author => undef, price => undef},
-    id => "$table1.id",
-    price => ["$table1.price", {if => 'exists'}]
-);
-is_deeply($param, {"$table1.price" => undef});
-
-$param = $dbi->map_param(
-    {price => 'a'},
-    id => ["$table1.id", {if => 'exists'}],
-    price => ["$table1.price", sub { '%' . $_[0] }, {if => 'exists'}]
-);
-is_deeply($param, {"$table1.price" => '%a'});
 
 test 'order';
 $dbi = DBIx::Custom->connect;

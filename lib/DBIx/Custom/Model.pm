@@ -44,9 +44,15 @@ foreach my $method (@methods) {
 
     my $code = sub {
         my $self = shift;
-        my $args = [qw/table bind_type primary_key type/];
-        push @$args, 'join' if $method =~ /^select/;
-        $self->call_dbi($method, {args => $args}, @_);
+        $self->dbi->$method(
+            @_ % 2 ? shift : (),
+            table => $self->table,
+            bind_type => $self->bind_type,
+            primary_key => $self->primary_key,
+            type => $self->type,
+            $method =~ /^select/ ? (join => $self->join) : (), 
+            @_
+        )
     };
     
     no strict 'refs';
@@ -54,23 +60,17 @@ foreach my $method (@methods) {
     *{"${class}::$method"} = $code;
 }
 
-sub call_dbi {
-    my $self = shift;
-    my $method = shift;
-    my $options = shift;
-    my $arg_names = $options->{args};
-    
-    my @args;
-    push @args, ($_ => $self->$_) for @$arg_names;
-    unshift @args, shift if @_ % 2;
-    
-    return $self->dbi->$method(@args, @_);
-}
-
 sub execute {
     my $self = shift;
-    push @_, ($_ => $self->$_) for qw/table bind_type primary_key type/;
-    return $self->dbi->execute(@_);
+    return $self->dbi->execute(
+        shift,
+        shift,
+        table => $self->table,
+        bind_type => $self->bind_type,
+        primary_key => $self->primary_key,
+        type => $self->type,
+        @_
+    );
 }
 
 sub DESTROY { }
@@ -174,22 +174,7 @@ L<DBIx::Custom::Model> inherits all methods from L<Object::Simple>,
 and you can use all methods of L<DBIx::Custom> and L<DBI>
 and implements the following new ones.
 
-=head2 C<call_dbi> EXPERIMENTAL
-
-    $model->call_dbi('insert',
-      {args => ['table', 'primary_key' 'bind_type']}, @_)
-
-Call L<DBIx::Custom>(or subclass) method. you can add
-attribute values of model to arguments by C<args> option.
-
-Generally this method is used when you want to added dbi method to model.
-
-    sub insert {
-        shift->call_dbi('insert',
-          {args => ['table', 'primary_key' 'bind_type']}, @_);
-    }
-
-=head2 C<count> EXPERIMENTAL
+=head2 C<count>
 
     my $count = $model->count;
 
@@ -211,7 +196,7 @@ you don't have to specify C<table> and C<primary_key> option.
 Same as C<delete_all> of L<DBIx::Custom> except that
 you don't have to specify C<table> and C<primary_key> option.
 
-=head2 C<execute EXPERIMENTAL>
+=head2 C<execute>
 
     $model->execute(...);
 
