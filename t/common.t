@@ -2556,6 +2556,15 @@ $param = $dbi->mapper(param => {id => 1, author => 'Ken', price => 1900})->map(
 is_deeply($param, {"$table1.id" => 1, "$table1.author" => '%Ken%',
   "$table1.price" => 1900});
 
+$dbi = DBIx::Custom->connect;
+$param = $dbi->mapper(param => {id => 1, author => 'Ken', price => 1900})->map(
+    id => "$table1.id",
+    author => ["$table1.author" => $dbi->like_value],
+    price => ["$table1.price", {condition => sub { $_[0] eq 1900 }}]
+);
+is_deeply($param, {"$table1.id" => 1, "$table1.author" => '%Ken%',
+  "$table1.price" => 1900});
+
 $param = $dbi->mapper(param => {id => 0, author => 0, price => 0})->map(
     id => "$table1.id",
     author => ["$table1.author", sub { '%' . $_[0] . '%' }],
@@ -3078,6 +3087,24 @@ $rows = $dbi->select(
     table => $table1,
     column => $key1,
     sqlfilter => sub {
+        my $sql = shift;
+        $sql = "select * from ( $sql ) t where $key1 = 1";
+        return $sql;
+    }
+)->all;
+is_deeply($rows, [{$key1 => 1}]);
+
+test 'select() after_build_sql option';
+$dbi = DBIx::Custom->connect;
+$dbi->user_table_info($user_table_info);
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->insert(table => $table1, param => {$key1 => 2, $key2 => 3});
+$rows = $dbi->select(
+    table => $table1,
+    column => $key1,
+    after_build_sql => sub {
         my $sql = shift;
         $sql = "select * from ( $sql ) t where $key1 = 1";
         return $sql;
