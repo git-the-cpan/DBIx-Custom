@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1725';
+our $VERSION = '0.1726';
 use 5.008001;
 
 use Carp 'croak';
@@ -269,12 +269,11 @@ sub delete {
       if $where_clause eq '' && !$allow_delete_all;
 
     # Delete statement
-    my @sql;
-    push @sql, "delete";
-    push @sql, $prefix if defined $prefix;
-    push @sql, "from " . $self->_q($table) . " $where_clause";
-    push @sql, $append if defined $append;
-    my $sql = join(' ', @sql);
+    my $sql;
+    $sql .= "delete ";
+    $sql .= "$prefix " if defined $prefix;
+    $sql .= "from " . $self->_q($table) . " $where_clause ";
+    $sql .= $append if defined $append;
     
     # Execute query
     return $self->execute($sql, $where_param, table => $table, %args);
@@ -633,13 +632,12 @@ sub insert {
     }
 
     # Insert statement
-    my @sql;
-    push @sql, "insert";
-    push @sql, $prefix if defined $prefix;
-    push @sql, "into " . $self->_q($table) . " "
-      . $self->insert_param($param, {wrap => $wrap});
-    push @sql, $append if defined $append;
-    my $sql = join (' ', @sql);
+    my $sql;
+    $sql .= "insert ";
+    $sql .= "$prefix " if defined $prefix;
+    $sql .= "into " . $self->_q($table) . " "
+      . $self->insert_param($param, {wrap => $wrap}) . " ";
+    $sql .= $append if defined $append;
     
     # Execute query
     return $self->execute($sql, $param, table => $table, %args);
@@ -896,11 +894,10 @@ sub select {
     $self->_add_relation_table($tables, $relation);
     
     # Select statement
-    my @sql;
-    push @sql, 'select';
+    my $sql = 'select ';
     
     # Prefix
-    push @sql, $prefix if defined $prefix;
+    $sql .= "$prefix " if defined $prefix;
     
     # Column clause
     if ($columns) {
@@ -918,26 +915,26 @@ sub select {
                 $column = join(' ', $column->[0], 'as', $self->_q($column->[1]));
             }
             unshift @$tables, @{$self->_search_tables($column)};
-            push @sql, ($column, ',');
+            $sql .= "$column, ";
         }
-        pop @sql if $sql[-1] eq ',';
+        $sql =~ s/, $/ /;
     }
-    else { push @sql, '*' }
+    else { $sql .= '* ' }
     
     # Table
-    push @sql, 'from';
+    $sql .= 'from ';
     if ($relation) {
         my $found = {};
         foreach my $table (@$tables) {
-            push @sql, ($self->_q($table), ',') unless $found->{$table};
+            $sql .= $self->_q($table) . ', ' unless $found->{$table};
             $found->{$table} = 1;
         }
     }
     else {
         my $main_table = $tables->[-1] || '';
-        push @sql, $self->_q($main_table);
+        $sql .= $self->_q($main_table);
     }
-    pop @sql if ($sql[-1] || '') eq ',';
+    $sql =~ s/, $/ /;
     croak "Not found table name " . _subname
       unless $tables->[-1];
 
@@ -967,19 +964,17 @@ sub select {
     unshift @$tables, @{$self->_search_tables($where_clause)};
     
     # Push join
-    $self->_push_join(\@sql, $join, $tables);
+    $self->_push_join(\$sql, $join, $tables);
     
     # Add where clause
-    push @sql, $where_clause;
+    $sql .= "$where_clause ";
     
     # Relation(DEPRECATED!);
-    $self->_push_relation(\@sql, $tables, $relation, $where_clause eq '' ? 1 : 0);
+    $self->_push_relation(\$sql, $tables, $relation, $where_clause eq '' ? 1 : 0)
+      if $relation;
     
     # Append
-    push @sql, $append if defined $append;
-    
-    # SQL
-    my $sql = join (' ', @sql);
+    $sql .= $append if defined $append;
     
     # Execute query
     my $result = $self->execute($sql, $where_param, table => $tables, %args);
@@ -1169,14 +1164,11 @@ sub update {
     $param = $self->merge_param($param, $where_param) if keys %$where_param;
     
     # Update statement
-    my @sql;
-    push @sql, "update";
-    push @sql, $prefix if defined $prefix;
-    push @sql, $self->_q($table) . " $update_clause $where_clause";
-    push @sql, $append if defined $append;
-    
-    # SQL
-    my $sql = join(' ', @sql);
+    my $sql;
+    $sql .= "update ";
+    $sql .= "$prefix " if defined $prefix;
+    $sql .= $self->_q($table) . " $update_clause $where_clause ";
+    $sql .= $append if defined $append;
     
     # Execute query
     return $self->execute($sql, $param, table => $table, %args);
@@ -1460,7 +1452,7 @@ sub _push_join {
             
             my @j_clauses = reverse split /\s(and|on)\s/, $j_clause;
             my $c = $self->safety_character;
-            my $join_re = qr/(?:^|\s)($c+)\.$c+\s.+\s($c+)\.$c+/;
+            my $join_re = qr/(?:^|\s)($c+)\.$c+[^$c]+($c+)\.$c+/;
             for my $clause (@j_clauses) {
                 if ($clause =~ $join_re) {
                     $table1 = $1;
@@ -1488,7 +1480,7 @@ sub _push_join {
     
     # Add join clause
     foreach my $need_table (@need_tables) {
-        push @$sql, $tree->{$need_table}{join};
+        $$sql .= $tree->{$need_table}{join} . ' ';
     }
 }
 
@@ -1894,15 +1886,15 @@ sub _push_relation {
     my ($self, $sql, $tables, $relation, $need_where) = @_;
     
     if (keys %{$relation || {}}) {
-        push @$sql, $need_where ? 'where' : 'and';
+        $$sql .= $need_where ? 'where ' : 'and ';
         foreach my $rcolumn (keys %$relation) {
             my $table1 = (split (/\./, $rcolumn))[0];
             my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
             push @$tables, ($table1, $table2);
-            push @$sql, ("$rcolumn = " . $relation->{$rcolumn},  'and');
+            $$sql .= "$rcolumn = " . $relation->{$rcolumn} .  'and ';
         }
     }
-    pop @$sql if $sql->[-1] eq 'and';    
+    $$sql =~ s/and $/ /;
 }
 
 # DEPRECATED!
@@ -2159,16 +2151,16 @@ Result class, default to L<DBIx::Custom::Result>.
 
 =head2 C<safety_character>
 
-    my $safety_character = $self->safety_character;
-    $dbi = $self->safety_character($character);
+    my $safety_character = $dbi->safety_character;
+    $dbi = $dbi->safety_character($character);
 
 Regex of safety character for table and column name, default to '\w'.
 Note that you don't have to specify like '[\w]'.
 
 =head2 C<separator>
 
-    my $separator = $self->separator;
-    $dbi = $self->separator('-');
+    my $separator = $dbi->separator;
+    $dbi = $dbi->separator('-');
 
 Separator which join table name and column name.
 This have effect to C<column> and C<mycolumn> method,
@@ -2178,15 +2170,12 @@ Default to C<.>.
 
 =head2 C<exclude_table>
 
-    my $exclude_table = $self->exclude_table;
-    $dbi = $self->exclude_table(qr/pg_/);
+    my $exclude_table = $dbi->exclude_table;
+    $dbi = $dbi->exclude_table(qr/pg_/);
 
-Regex matching system table.
-this regex match is used by C<each_table> method and C<each_column> method
-System table is ignored.
-C<type_rule> method and C<setup_model> method call
-C<each_table>, so if you set C<exclude_table> properly,
-The performance is up.
+Excluded table regex.
+C<each_column>, C<each_table>, C<type_rule>,
+and C<setup_model> methods ignore matching tables.
 
 =head2 C<tag_parse>
 
@@ -2208,14 +2197,14 @@ User name, used when C<connect> method is executed.
     my $user_column_info = $dbi->user_column_info;
     $dbi = $dbi->user_column_info($user_column_info);
 
-You can set the following data.
+You can set the date like the following one.
 
     [
         {table => 'book', column => 'title', info => {...}},
         {table => 'author', column => 'name', info => {...}}
     ]
 
-Usually, you can set return value of C<get_column_info>.
+Usually, you set return value of C<get_column_info>.
 
     my $user_column_info
       = $dbi->get_column_info(exclude_table => qr/^system/);
@@ -2679,7 +2668,7 @@ Turn C<into2> type rule off.
 
 =head2 C<get_column_info>
 
-    my $tables = $self->get_column_info(exclude_table => qr/^system_/);
+    my $tables = $dbi->get_column_info(exclude_table => qr/^system_/);
 
 get column infomation except for one which match C<exclude_table> pattern.
 
@@ -2690,7 +2679,7 @@ get column infomation except for one which match C<exclude_table> pattern.
 
 =head2 C<get_table_info>
 
-    my $tables = $self->get_table_info(exclude => qr/^system_/);
+    my $tables = $dbi->get_table_info(exclude => qr/^system_/);
 
 get table infomation except for one which match C<exclude> pattern.
 
@@ -2936,7 +2925,7 @@ Get a L<DBIx::Custom::Model> object,
 
 =head2 C<mycolumn>
 
-    my $column = $self->mycolumn(book => ['author', 'title']);
+    my $column = $dbi->mycolumn(book => ['author', 'title']);
 
 Create column clause for myself. The follwoing column clause is created.
 
