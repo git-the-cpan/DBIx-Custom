@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1726';
+our $VERSION = '0.1727';
 use 5.008001;
 
 use Carp 'croak';
@@ -1452,7 +1452,7 @@ sub _push_join {
             
             my @j_clauses = reverse split /\s(and|on)\s/, $j_clause;
             my $c = $self->safety_character;
-            my $join_re = qr/(?:^|\s)($c+)\.$c+[^$c]+($c+)\.$c+/;
+            my $join_re = qr/($c+)\.$c+[^$c].*?($c+)\.$c+/sm;
             for my $clause (@j_clauses) {
                 if ($clause =~ $join_re) {
                     $table1 = $1;
