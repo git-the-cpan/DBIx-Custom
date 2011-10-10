@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1729';
+our $VERSION = '0.1730';
 use 5.008001;
 
 use Carp 'croak';
@@ -249,7 +249,8 @@ sub delete {
     my $prefix = delete $args{prefix};
     
     # Where
-    $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
+    $where = $self->_create_param_from_id($id, $primary_key, $table)
+      if defined $id;
     my $where_clause = '';
     if (ref $where eq 'ARRAY' && !ref $where->[0]) {
         $where_clause = "where " . $where->[0];
@@ -403,16 +404,11 @@ sub execute {
     warn "sqlfilter option is DEPRECATED" if $args{sqlfilter};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
-    croak "insert method primary_key option " .
+    croak "execute method primary_key option " .
           "must be specified when id is specified " . _subname
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
 
-    if (defined $id) {
-        my $id_param = $self->_create_param_from_id($id, $primary_key);
-        $param = $self->merge_param($id_param, $param);
-    }
-    
     # Check argument names
     foreach my $name (keys %args) {
         croak qq{"$name" is wrong option } . _subname
@@ -422,6 +418,7 @@ sub execute {
     $query = $self->_create_query($query, $after_build_sql) unless ref $query;
     
     # Save query
+    if (ref $query eq 'DBIx::Custom::Result') { $DB::single = 1 }
     $self->last_sql($query->sql);
 
     return $query if $query_return;
@@ -432,6 +429,11 @@ sub execute {
     # Tables
     unshift @$tables, @{$query->{tables} || []};
     my $main_table = @{$tables}[-1];
+
+    if (defined $id) {
+        my $id_param = $self->_create_param_from_id($id, $primary_key, $main_table);
+        $param = $self->merge_param($id_param, $param);
+    }
     
     # DEPRECATED! Cleanup tables
     $tables = $self->_remove_duplicate_table($tables, $main_table)
@@ -593,6 +595,16 @@ sub get_column_info {
         @$column_info];
 }
 
+sub helper {
+    my $self = shift;
+    
+    # Register method
+    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
+    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
+    
+    return $self;
+}
+
 sub insert {
     my $self = shift;
     
@@ -627,6 +639,7 @@ sub insert {
 
     # Merge parameter
     if (defined $id) {
+        warn "insert method's id option is DEPRECATED!";
         my $id_param = $self->_create_param_from_id($id, $primary_key);
         $param = $self->merge_param($id_param, $param);
     }
@@ -643,30 +656,33 @@ sub insert {
     return $self->execute($sql, $param, table => $table, %args);
 }
 
-sub values_clause {
-    my ($self, $param, $opts) = @_;
+sub insert_or_update {
+    my $self = shift;
+
+    # Arguments
+    my $param  = shift;
+    my %args = @_;
+    my $id = delete $args{id};
+    my $primary_key = delete $args{primary_key};
+    croak "insert_or_update method " .
+          "need id and primary_key option " . _subname
+      unless defined $id && defined $primary_key;
+    $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    my $table  = delete $args{table};
+    croak qq{"table" option must be specified } . _subname
+      unless defined $table;
+    my $select_option = delete $args{select_option};
     
-    my $wrap = $opts->{wrap} || {};
+    my $row = $self->select(table => $table, id => $id,
+        primary_key => $primary_key, %$select_option)->one;
     
-    # Create insert parameter tag
-    my $safety = $self->safety_character;
-    my @columns;
-    my @placeholders;
-    foreach my $column (sort keys %$param) {
-        croak qq{"$column" is not safety column name } . _subname
-          unless $column =~ /^[$safety\.]+$/;
-        my $column_quote = $self->_q($column);
-        $column_quote =~ s/\./$self->_q(".")/e;
-        push @columns, $column_quote;
-        
-        my $func = $wrap->{$column} || sub { $_[0] };
-        push @placeholders,
-          ref $param->{$column} eq 'SCALAR' ? ${$param->{$column}}
-        : $func->(":$column");
+    if ($row) {
+        return $self->update($param, id => $id, primary_key => $primary_key,
+          table => $table, %args);
     }
-    
-    return '(' . join(', ', @columns) . ') ' . 'values ' .
-           '(' . join(', ', @placeholders) . ')'
+    else {
+        return $self->insert($param, table => $table, %args);
+    }
 }
 
 sub insert_timestamp {
@@ -774,16 +790,6 @@ sub merge_param {
     }
     
     return $merge;
-}
-
-sub method {
-    my $self = shift;
-    
-    # Register method
-    my $methods = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_methods} = {%{$self->{_methods} || {}}, %$methods};
-    
-    return $self;
 }
 
 sub model {
@@ -932,7 +938,7 @@ sub select {
     }
     else {
         my $main_table = $tables->[-1] || '';
-        $sql .= $self->_q($main_table);
+        $sql .= $self->_q($main_table) . ' ';
     }
     $sql =~ s/, $/ /;
     croak "Not found table name " . _subname
@@ -944,7 +950,8 @@ sub select {
     
     # Where
     my $where_clause = '';
-    $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
+    $where = $self->_create_param_from_id($id, $primary_key, $tables->[-1])
+      if defined $id;
     if (ref $where eq 'ARRAY' && !ref $where->[0]) {
         $where_clause = "where " . $where->[0];
         $where_param = $where->[1];
@@ -1141,7 +1148,8 @@ sub update {
     my $assign_clause = $self->assign_clause($param, {wrap => $wrap});
 
     # Where
-    $where = $self->_create_param_from_id($id, $primary_key) if defined $id;
+    $where = $self->_create_param_from_id($id, $primary_key, $table)
+      if defined $id;
     my $where_clause = '';
     if (ref $where eq 'ARRAY' && !ref $where->[0]) {
         $where_clause = "where " . $where->[0];
@@ -1185,6 +1193,32 @@ sub update_timestamp {
         return $self;
     }
     return $self->{update_timestamp};
+}
+
+sub values_clause {
+    my ($self, $param, $opts) = @_;
+    
+    my $wrap = $opts->{wrap} || {};
+    
+    # Create insert parameter tag
+    my $safety = $self->safety_character;
+    my @columns;
+    my @placeholders;
+    foreach my $column (sort keys %$param) {
+        croak qq{"$column" is not safety column name } . _subname
+          unless $column =~ /^[$safety\.]+$/;
+        my $column_quote = $self->_q($column);
+        $column_quote =~ s/\./$self->_q(".")/e;
+        push @columns, $column_quote;
+        
+        my $func = $wrap->{$column} || sub { $_[0] };
+        push @placeholders,
+          ref $param->{$column} eq 'SCALAR' ? ${$param->{$column}}
+        : $func->(":$column");
+    }
+    
+    return '(' . join(', ', @columns) . ') ' . 'values ' .
+           '(' . join(', ', @placeholders) . ')'
 }
 
 sub where { DBIx::Custom::Where->new(dbi => shift, @_) }
@@ -1315,7 +1349,7 @@ sub _create_bind_values {
 }
 
 sub _create_param_from_id {
-    my ($self, $id, $primary_keys) = @_;
+    my ($self, $id, $primary_keys, $table) = @_;
     
     # Create parameter
     my $param = {};
@@ -1328,7 +1362,9 @@ sub _create_param_from_id {
             . " (" . (caller 1)[3] . ")"
           unless @$primary_keys eq @$id;
         for(my $i = 0; $i < @$primary_keys; $i ++) {
-           $param->{$primary_keys->[$i]} = $id->[$i];
+           my $key = $primary_keys->[$i];
+           $key = "$table." . $key if $table;
+           $param->{$key} = $id->[$i];
         }
     }
     
@@ -1671,6 +1707,11 @@ has default_dbi_option => sub {
     return shift->default_option;
 };
 
+# DEPRECATED!
+sub method {
+    warn "method is DEPRECATED! use helper instead";
+    return shift->helper(@_);
+}
 
 # DEPRECATED!
 sub assign_param {
@@ -2329,7 +2370,7 @@ and C<PrintError> option is false by default.
 
 =head2 C<count>
 
-    my $count = $model->count(table => 'book');
+    my $count = $dbi->count(table => 'book');
 
 Get rows count.
 
@@ -2923,9 +2964,9 @@ Merge parameters.
 
     {key1 => [1, 1], key2 => 2}
 
-=head2 C<method>
+=head2 C<helper>
 
-    $dbi->method(
+    $dbi->helper(
         update_or_insert => sub {
             my $self = shift;
             
@@ -2938,7 +2979,7 @@ Merge parameters.
         }
     );
 
-Register method. These method is called directly from L<DBIx::Custom> object.
+Register helper. These helper is called directly from L<DBIx::Custom> object.
 
     $dbi->update_or_insert;
     $dbi->find_or_create;
@@ -3505,6 +3546,7 @@ L<DBIx::Custom>
     cache_method # will be removed at 2017/1/1
     
     # Methods
+    method # will be removed at 2017/1/1
     assign_param # will be removed at 2017/1/1
     update_param # will be removed at 2017/1/1
     insert_param # will be removed at 2017/1/1
@@ -3523,6 +3565,7 @@ L<DBIx::Custom>
     update_param_tag # will be removed at 2017/1/1
     
     # Options
+    insert method id option # will be removed at 2017/1/1
     select method relation option # will be removed at 2017/1/1
     select method param option # will be removed at 2017/1/1
     select method column option [COLUMN, as => ALIAS] format
@@ -3538,6 +3581,7 @@ L<DBIx::Custom>
 L<DBIx::Custom::Model>
 
     # Attribute methods
+    method # will be removed at 2017/1/1
     filter # will be removed at 2017/1/1
     name # will be removed at 2017/1/1
     type # will be removed at 2017/1/1

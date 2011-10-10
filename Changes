@@ -1,3 +1,10 @@
+0.1730
+    - added EXPERIMENTAL insert_or_update method
+    - method method of DBIx::Custom::Model is renamed to helper,
+      method is DEPRECATED!
+    - method method is renamed to helper, method is DEPRECATED!
+    - insert method's id option is DEPRECATED!
+    - fixed id option bug when column name is anbiguous
 0.1729
     - dbi_option attribute is renamed to option, dbi_option is DEPRECATED!
     - default_dbi_option is renamed to default_option, default_dbi_option
