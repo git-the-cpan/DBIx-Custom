@@ -1,3 +1,6 @@
+0.1731
+    - removed DEPRECATED status from insert method's id option
+    - renamed EXPERIMENTAL insert_or_update to update_or_insert
 0.1730
     - added EXPERIMENTAL insert_or_update method
     - method method of DBIx::Custom::Model is renamed to helper,
