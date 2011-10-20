@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1731';
+our $VERSION = '0.1732';
 use 5.008001;
 
 use Carp 'croak';
@@ -237,7 +237,6 @@ sub delete {
     croak qq{"table" option must be specified. } . _subname
       unless $table;
     my $where            = delete $args{where} || {};
-    my $append           = delete $args{append};
     my $allow_delete_all = delete $args{allow_delete_all};
     my $where_param      = delete $args{where_param} || {};
     my $id = delete $args{id};
@@ -274,7 +273,6 @@ sub delete {
     $sql .= "delete ";
     $sql .= "$prefix " if defined $prefix;
     $sql .= "from " . $self->_q($table) . " $where_clause ";
-    $sql .= $append if defined $append;
     
     # Execute query
     return $self->execute($sql, $where_param, table => $table, %args);
@@ -379,7 +377,7 @@ our %VALID_ARGS = map { $_ => 1 } qw/append after_build_sql allow_delete_all
 
 sub execute {
     my $self = shift;
-    my $query = shift;
+    my $sql = shift;
     my $param;
     $param = shift if @_ % 2;
     my %args = @_;
@@ -408,6 +406,8 @@ sub execute {
           "must be specified when id is specified " . _subname
       if defined $id && !defined $primary_key;
     $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
+    my $append = delete $args{append};
+    $sql .= $append if defined $append && !ref $sql;
 
     # Check argument names
     foreach my $name (keys %args) {
@@ -415,10 +415,10 @@ sub execute {
           unless $VALID_ARGS{$name};
     }
     
-    $query = $self->_create_query($query, $after_build_sql) unless ref $query;
+    my $query
+      = ref $sql ? $sql : $self->_create_query($sql, $after_build_sql);
     
     # Save query
-    if (ref $query eq 'DBIx::Custom::Result') { $DB::single = 1 }
     $self->last_sql($query->sql);
 
     return $query if $query_return;
@@ -617,7 +617,6 @@ sub insert {
       unless defined $table;
     my $p = delete $args{param} || {};
     $param  ||= $p;
-    my $append = delete $args{append} || '';
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
     croak "insert method primary_key option " .
@@ -650,7 +649,6 @@ sub insert {
     $sql .= "$prefix " if defined $prefix;
     $sql .= "into " . $self->_q($table) . " "
       . $self->values_clause($param, {wrap => $wrap}) . " ";
-    $sql .= $append if defined $append;
     
     # Execute query
     return $self->execute($sql, $param, table => $table, %args);
@@ -884,7 +882,6 @@ sub select {
                : [];
     my $columns   = delete $args{column};
     my $where     = delete $args{where} || {};
-    my $append    = delete $args{append};
     my $join      = delete $args{join} || [];
     croak qq{"join" must be array reference } . _subname
       unless ref $join eq 'ARRAY';
@@ -986,9 +983,6 @@ sub select {
     # Relation(DEPRECATED!);
     $self->_push_relation(\$sql, $tables, $relation, $where_clause eq '' ? 1 : 0)
       if $relation;
-    
-    # Append
-    $sql .= $append if defined $append;
     
     # Execute query
     my $result = $self->execute($sql, $where_param, table => $tables, %args);
@@ -1130,7 +1124,6 @@ sub update {
     $param  ||= $p;
     my $where = delete $args{where} || {};
     my $where_param = delete $args{where_param} || {};
-    my $append = delete $args{append} || '';
     my $allow_update_all = delete $args{allow_update_all};
     my $id = delete $args{id};
     my $primary_key = delete $args{primary_key};
@@ -1183,7 +1176,6 @@ sub update {
     $sql .= "update ";
     $sql .= "$prefix " if defined $prefix;
     $sql .= $self->_q($table) . " set $assign_clause $where_clause ";
-    $sql .= $append if defined $append;
     
     # Execute query
     return $self->execute($sql, $param, table => $table, %args);
@@ -2151,14 +2143,6 @@ Note that L<DBIx::Connector> must be installed.
 
 Data source name, used when C<connect> method is executed.
 
-=head2 C<option>
-
-    my $option = $dbi->option;
-    $dbi = $dbi->option($option);
-
-L<DBI> option, used when C<connect> method is executed.
-Each value in option override the value of C<default_option>.
-
 =head2 C<default_option>
 
     my $default_option = $dbi->default_option;
@@ -2172,6 +2156,15 @@ default to the following values.
         PrintError => 0,
         AutoCommit => 1,
     }
+
+=head2 C<exclude_table>
+
+    my $exclude_table = $dbi->exclude_table;
+    $dbi = $dbi->exclude_table(qr/pg_/);
+
+Excluded table regex.
+C<each_column>, C<each_table>, C<type_rule>,
+and C<setup_model> methods ignore matching tables.
 
 =head2 C<filters>
 
@@ -2193,6 +2186,14 @@ Get last successed SQL executed by C<execute> method.
     $dbi = $dbi->models(\%models);
 
 Models, included by C<include_model> method.
+
+=head2 C<option>
+
+    my $option = $dbi->option;
+    $dbi = $dbi->option($option);
+
+L<DBI> option, used when C<connect> method is executed.
+Each value in option override the value of C<default_option>.
 
 =head2 C<password>
 
@@ -2245,15 +2246,6 @@ This have effect to C<column> and C<mycolumn> method,
 and C<select> method's column option.
 
 Default to C<.>.
-
-=head2 C<exclude_table>
-
-    my $exclude_table = $dbi->exclude_table;
-    $dbi = $dbi->exclude_table(qr/pg_/);
-
-Excluded table regex.
-C<each_column>, C<each_table>, C<type_rule>,
-and C<setup_model> methods ignore matching tables.
 
 =head2 C<tag_parse>
 
@@ -2413,15 +2405,12 @@ Execute delete statement.
 
 The following opitons are available.
 
+B<OPTIONS>
+
+C<delete> method use all of C<execute> method's options,
+and use the following new ones.
+
 =over 4
-
-=item C<append>
-
-Same as C<select> method's C<append> option.
-
-=item C<filter>
-
-Same as C<execute> method's C<filter> option.
 
 =item C<id>
 
@@ -2432,7 +2421,7 @@ ID corresponding to C<primary_key>.
 You can delete rows by C<id> and C<primary_key>.
 
     $dbi->delete(
-        parimary_key => ['id1', 'id2'],
+        primary_key => ['id1', 'id2'],
         id => [4, 5],
         table => 'book',
     );
@@ -2449,14 +2438,6 @@ prefix before table name section.
 
     delete some from book
 
-=item C<query>
-
-Same as C<execute> method's C<query> option.
-
-=item C<after_build_sql>
-
-Same as C<execute> method's C<after_build_sql> option.
-
 =item C<table>
 
     table => 'book'
@@ -2466,30 +2447,6 @@ Table name.
 =item C<where>
 
 Same as C<select> method's C<where> option.
-
-=item C<primary_key>
-
-See C<id> option.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
-
-=item C<type_rule_off>
-
-Same as C<execute> method's C<type_rule_off> option.
-
-=item C<type_rule1_off>
-
-    type_rule1_off => 1
-
-Same as C<execute> method's C<type_rule1_off> option.
-
-=item C<type_rule2_off>
-
-    type_rule2_off => 1
-
-Same as C<execute> method's C<type_rule2_off> option.
 
 =back
 
@@ -2514,10 +2471,18 @@ Options is same as C<delete>.
         }
     );
 
-Iterate all column informations of all table from database.
-Argument is callback when one column is found.
-Callback receive four arguments, dbi object, table name,
-column name and column information.
+Iterate all column informations in database.
+Argument is callback which is executed when one column is found.
+Callback receive four arguments. C<DBIx::Custom object>, C<table name>,
+C<column name>, and C<column information>.
+
+If C<user_column_info> is set, C<each_column> method use C<user_column_info>
+infromation, you can improve the performance of C<each_column> in
+the following way.
+
+    my $column_infos = $dbi->get_column_info(exclude_table => qr/^system_/);
+    $dbi->user_column_info($column_info);
+    $dbi->each_column(sub { ... });
 
 =head2 C<each_table>
 
@@ -2529,10 +2494,18 @@ column name and column information.
         }
     );
 
-Iterate all table informationsfrom database.
-Argument is callback when one table is found.
-Callback receive three arguments, dbi object, table name,
-table information.
+Iterate all table informationsfrom in database.
+Argument is callback which is executed when one table is found.
+Callback receive three arguments, C<DBIx::Custom object>, C<table name>,
+C<table information>.
+
+If C<user_table_info> is set, C<each_table> method use C<user_table_info>
+infromation, you can improve the performance of C<each_table> in
+the following way.
+
+    my $table_infos = $dbi->get_table_info(exclude => qr/^system_/);
+    $dbi->user_table_info($table_info);
+    $dbi->each_table(sub { ... });
 
 =head2 C<execute>
 
@@ -2561,7 +2534,7 @@ Named placeholder such as C<:title> is replaced by placeholder C<?>.
     select * from where title = ? and author like ?;
 
 You can specify operator with named placeholder
- by C<name{operator}> syntax.
+by C<name{operator}> syntax.
 
     # Original
     select * from book where :title{=} and :author{like}
@@ -2575,9 +2548,17 @@ If you want to use colon generally, you must escape it by C<\\>
 
     select * from where title = "aa\\:bb";
 
+B<OPTIONS>
+
 The following opitons are available.
 
 =over 4
+
+=item C<append>
+
+    append => 'order by name'
+
+Append some statement after SQL.
 
 =item C<bind_type>
 
@@ -2624,7 +2605,7 @@ You can delete rows by C<id> and C<primary_key>.
     $dbi->execute(
         "select * from book where id1 = :id1 and id2 = :id2",
         {},
-        parimary_key => ['id1', 'id2'],
+        primary_key => ['id1', 'id2'],
         id => [4, 5],
     );
 
@@ -2651,7 +2632,7 @@ If you want to execute SQL fast, you can do the following way.
     my $query;
     foreach my $row (@$rows) {
       $query ||= $dbi->insert($row, table => 'table1', query => 1);
-      $dbi->execute($query, $row, filter => {ab => sub { $_[0] * 2 }});
+      $dbi->execute($query, $row);
     }
 
 Statement handle is reused and SQL parsing is finished,
@@ -2674,7 +2655,10 @@ and don't forget to sort $row values by $row key asc order.
 
 =item C<primary_key>
 
-See C<id> option.
+    primary_key => 'id'
+    primary_key => ['id1', 'id2']
+
+Priamry key. This is used when C<id> option find primary key.
 
 =item C<after_build_sql> 
 
@@ -2714,7 +2698,7 @@ You must set C<table> option.
 
 =item C<table_alias>
 
-    table_alias => {user => 'hiker'}
+    table_alias => {user => 'worker'}
 
 Table alias. Key is real table name, value is alias table name.
 If you set C<table_alias>, you can enable C<into1> and C<into2> type rule
@@ -2742,7 +2726,7 @@ Turn C<into2> type rule off.
 
 =head2 C<get_column_info>
 
-    my $tables = $dbi->get_column_info(exclude_table => qr/^system_/);
+    my $column_infos = $dbi->get_column_info(exclude_table => qr/^system_/);
 
 get column infomation except for one which match C<exclude_table> pattern.
 
@@ -2753,7 +2737,7 @@ get column infomation except for one which match C<exclude_table> pattern.
 
 =head2 C<get_table_info>
 
-    my $tables = $dbi->get_table_info(exclude => qr/^system_/);
+    my $table_infos = $dbi->get_table_info(exclude => qr/^system_/);
 
 get table infomation except for one which match C<exclude> pattern.
 
@@ -2763,6 +2747,26 @@ get table infomation except for one which match C<exclude> pattern.
     ]
 
 You can set this value to C<user_table_info>.
+
+=head2 C<helper>
+
+    $dbi->helper(
+        update_or_insert => sub {
+            my $self = shift;
+            
+            # Process
+        },
+        find_or_create   => sub {
+            my $self = shift;
+            
+            # Process
+        }
+    );
+
+Register helper. These helper is called directly from L<DBIx::Custom> object.
+
+    $dbi->update_or_insert;
+    $dbi->find_or_create;
 
 =head2 C<insert>
 
@@ -2776,21 +2780,12 @@ as parameter value.
 
     {date => \"NOW()"}
 
-The following opitons are available.
+B<options>
+
+C<insert> method use all of C<execute> method's options,
+and use the following new ones.
 
 =over 4
-
-=item C<append>
-
-Same as C<select> method's C<append> option.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
-
-=item C<filter>
-
-Same as C<execute> method's C<filter> option.
 
 =item C<id>
 
@@ -2802,7 +2797,7 @@ You can insert a row by C<id> and C<primary_key>.
 
     $dbi->insert(
         {title => 'Perl', author => 'Ken'}
-        parimary_key => ['id1', 'id2'],
+        primary_key => ['id1', 'id2'],
         id => [4, 5],
         table => 'book'
     );
@@ -2822,30 +2817,11 @@ prefix before table name section
 
     insert or replace into book
 
-=item C<primary_key>
-
-    primary_key => 'id'
-    primary_key => ['id1', 'id2']
-
-Primary key. This is used by C<id> option.
-
-=item C<query>
-
-Same as C<execute> method's C<query> option.
-
-=item C<after_build_sql>
-
-Same as C<execute> method's C<after_build_sql> option.
-
 =item C<table>
 
     table => 'book'
 
 Table name.
-
-=item C<type_rule_off>
-
-Same as C<execute> method's C<type_rule_off> option.
 
 =item C<timestamp>
 
@@ -2854,18 +2830,6 @@ Same as C<execute> method's C<type_rule_off> option.
 If this value is set to 1,
 automatically created timestamp column is set based on
 C<timestamp> attribute's C<insert> value.
-
-=item C<type_rule1_off>
-
-    type_rule1_off => 1
-
-Same as C<execute> method's C<type_rule1_off> option.
-
-=item C<type_rule2_off>
-
-    type_rule2_off => 1
-
-Same as C<execute> method's C<type_rule2_off> option.
 
 =item C<wrap>
 
@@ -2885,14 +2849,6 @@ is executed, the following SQL is executed.
 =back
 
 =over 4
-
-=head2 C<values_clause>
-
-    my $values_clause = $dbi->values_clause({title => 'a', age => 2});
-
-Create values clause.
-
-    (title, author) values (title = :title, age = :age);
 
 =head2 C<include_model>
 
@@ -2941,19 +2897,25 @@ See L<DBIx::Custom::Model> to know model features.
 
 =head2 C<insert_timestamp>
 
-    $dbi->insert_timestamp(
-      [qw/created_at updated_at/] => sub { localtime });
+$dbi->insert_timestamp(
+  [qw/created_at updated_at/]
+    => sub { Time::Piece->localtime->strftime("%Y-%m-%d %H:%M:%S") }
+);
 
-Parameter for timestamp columns when C<insert> method is executed
+Timestamp value when C<insert> method is executed
 with C<timestamp> option.
 
-If multiple column are specified, same value is used.
+If C<insert_timestamp> is set and C<insert> method is executed
+with C<timestamp> option, column C<created_at> and C<update_at>
+is automatically set to the value like "2010-10-11 10:12:54".
 
-=head2 C<like_value EXPERIMENTAL>
+$dbi->insert($param, table => 'book', timestamp => 1);
+
+=head2 C<like_value>
 
     my $like_value = $dbi->like_value
 
-Constant code reference for the like value.
+Code reference which return a value for the like value.
 
     sub { "%$_[0]%" }
 
@@ -2967,35 +2929,18 @@ Create a new L<DBIx::Custom::Mapper> object.
 
     my $param = $dbi->merge_param({key1 => 1}, {key1 => 1, key2 => 2});
 
-Merge parameters.
+Merge parameters. The following new parameter is created.
 
     {key1 => [1, 1], key2 => 2}
 
-=head2 C<helper>
-
-    $dbi->helper(
-        update_or_insert => sub {
-            my $self = shift;
-            
-            # Process
-        },
-        find_or_create   => sub {
-            my $self = shift;
-            
-            # Process
-        }
-    );
-
-Register helper. These helper is called directly from L<DBIx::Custom> object.
-
-    $dbi->update_or_insert;
-    $dbi->find_or_create;
+If same keys contains, the value is converted to array reference.
 
 =head2 C<model>
 
     my $model = $dbi->model('book');
 
-Get a L<DBIx::Custom::Model> object,
+Get a L<DBIx::Custom::Model> object
+create by C<create_model> or C<include_model>
 
 =head2 C<mycolumn>
 
@@ -3022,7 +2967,7 @@ Create a new L<DBIx::Custom> object.
     my $not_exists = $dbi->not_exists;
 
 DBIx::Custom::NotExists object, indicating the column is not exists.
-This is used by C<clause> of L<DBIx::Custom::Where> .
+This is used in C<param> of L<DBIx::Custom::Where> .
 
 =head2 C<order>
 
@@ -3046,6 +2991,190 @@ Create a new L<DBIx::Custom::Order> object.
     );
     
 Register filters, used by C<filter> option of many methods.
+
+=head2 C<select>
+
+    my $result = $dbi->select(
+        table  => 'book',
+        column => ['author', 'title'],
+        where  => {author => 'Ken'},
+    );
+    
+Execute select statement.
+
+B<OPTIONS>
+
+C<select> method use all of C<execute> method's options,
+and use the following new ones.
+
+=over 4
+
+=item C<column>
+    
+    column => 'author'
+    column => ['author', 'title']
+
+Column clause.
+    
+if C<column> is not specified, '*' is set.
+
+    column => '*'
+
+You can specify hash of array reference.
+
+    column => [
+        {book => [qw/author title/]},
+        {person => [qw/name age/]}
+    ]
+
+This is expanded to the following one by using C<colomn> method.
+
+    book.author as "book.author",
+    book.title as "book.title",
+    person.name as "person.name",
+    person.age as "person.age"
+
+You can specify array of array reference, first argument is
+column name, second argument is alias.
+
+    column => [
+        ['date(book.register_datetime)' => 'book.register_date']
+    ];
+
+Alias is quoted properly and joined.
+
+    date(book.register_datetime) as "book.register_date"
+
+=item C<filter>
+
+Same as C<execute> method's C<filter> option.
+
+=item C<id>
+
+    id => 4
+    id => [4, 5]
+
+ID corresponding to C<primary_key>.
+You can select rows by C<id> and C<primary_key>.
+
+    $dbi->select(
+        primary_key => ['id1', 'id2'],
+        id => [4, 5],
+        table => 'book'
+    );
+
+The above is same as the followin one.
+
+    $dbi->select(
+        where => {id1 => 4, id2 => 5},
+        table => 'book'
+    );
+    
+=item C<param>
+
+    param => {'table2.key3' => 5}
+
+Parameter shown before where clause.
+    
+For example, if you want to contain tag in join clause, 
+you can pass parameter by C<param> option.
+
+    join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
+              ' as table2 on table1.key1 = table2.key1']
+
+=itme C<prefix>
+
+    prefix => 'SQL_CALC_FOUND_ROWS'
+
+Prefix of column cluase
+
+    select SQL_CALC_FOUND_ROWS title, author from book;
+
+=item C<join>
+
+    join => [
+        'left outer join company on book.company_id = company_id',
+        'left outer join location on company.location_id = location.id'
+    ]
+        
+Join clause. If column cluase or where clause contain table name like "company.name",
+join clausees needed when SQL is created is used automatically.
+
+    $dbi->select(
+        table => 'book',
+        column => ['company.location_id as location_id'],
+        where => {'company.name' => 'Orange'},
+        join => [
+            'left outer join company on book.company_id = company.id',
+            'left outer join location on company.location_id = location.id'
+        ]
+    );
+
+In above select, column and where clause contain "company" table,
+the following SQL is created
+
+    select company.location_id as location_id
+    from book
+      left outer join company on book.company_id = company.id
+    where company.name = ?;
+
+You can specify two table by yourself. This is useful when join parser can't parse
+the join clause correctly.
+
+    $dbi->select(
+        table => 'book',
+        column => ['company.location_id as location_id'],
+        where => {'company.name' => 'Orange'},
+        join => [
+            {
+                clause => 'left outer join location on company.location_id = location.id',
+                table => ['company', 'location']
+            }
+        ]
+    );
+
+=item C<table>
+
+    table => 'book'
+
+Table name.
+
+=item C<where>
+    
+    # Hash refrence
+    where => {author => 'Ken', 'title' => 'Perl'}
+    
+    # DBIx::Custom::Where object
+    where => $dbi->where(
+        clause => ['and', 'author = :author', 'title like :title'],
+        param  => {author => 'Ken', title => '%Perl%'}
+    );
+    
+    # Array reference 1 (array reference, hash referenc). same as above
+    where => [
+        ['and', 'author = :author', 'title like :title'],
+        {author => 'Ken', title => '%Perl%'}
+    ];    
+    
+    # Array reference 2 (String, hash reference)
+    where => [
+        'title like :title',
+        {title => '%Perl%'}
+    ]
+    
+    # String
+    where => 'title is null'
+
+Where clause. See L<DBIx::Custom::Where>.
+    
+=back
+
+=head2 C<setup_model>
+
+    $dbi->setup_model;
+
+Setup all model objects.
+C<columns> of model object is automatically set, parsing database information.
 
 =head2 C<type_rule>
 
@@ -3121,221 +3250,6 @@ You can also specify multiple types at once.
         ],
     );
 
-=head2 C<select>
-
-    my $result = $dbi->select(
-        table  => 'book',
-        column => ['author', 'title'],
-        where  => {author => 'Ken'},
-    );
-    
-Execute select statement.
-
-The following opitons are available.
-
-=over 4
-
-=item C<append>
-
-    append => 'order by title'
-
-Append statement to last of SQL.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
-    
-=item C<column>
-    
-    column => 'author'
-    column => ['author', 'title']
-
-Column clause.
-    
-if C<column> is not specified, '*' is set.
-
-    column => '*'
-
-You can specify hash of array reference.
-
-    column => [
-        {book => [qw/author title/]},
-        {person => [qw/name age/]}
-    ]
-
-This is expanded to the following one by using C<colomn> method.
-
-    book.author as "book.author",
-    book.title as "book.title",
-    person.name as "person.name",
-    person.age as "person.age"
-
-You can specify array of array reference, first argument is
-column name, second argument is alias.
-
-    column => [
-        ['date(book.register_datetime)' => 'book.register_date']
-    ];
-
-Alias is quoted properly and joined.
-
-    date(book.register_datetime) as "book.register_date"
-
-=item C<filter>
-
-Same as C<execute> method's C<filter> option.
-
-=item C<id>
-
-    id => 4
-    id => [4, 5]
-
-ID corresponding to C<primary_key>.
-You can select rows by C<id> and C<primary_key>.
-
-    $dbi->select(
-        parimary_key => ['id1', 'id2'],
-        id => [4, 5],
-        table => 'book'
-    );
-
-The above is same as the followin one.
-
-    $dbi->select(
-        where => {id1 => 4, id2 => 5},
-        table => 'book'
-    );
-    
-=item C<param> EXPERIMETNAL
-
-    param => {'table2.key3' => 5}
-
-Parameter shown before where clause.
-    
-For example, if you want to contain tag in join clause, 
-you can pass parameter by C<param> option.
-
-    join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
-              ' as table2 on table1.key1 = table2.key1']
-
-=itme C<prefix>
-
-    prefix => 'SQL_CALC_FOUND_ROWS'
-
-Prefix of column cluase
-
-    select SQL_CALC_FOUND_ROWS title, author from book;
-
-=item C<join>
-
-    join => [
-        'left outer join company on book.company_id = company_id',
-        'left outer join location on company.location_id = location.id'
-    ]
-        
-Join clause. If column cluase or where clause contain table name like "company.name",
-join clausees needed when SQL is created is used automatically.
-
-    $dbi->select(
-        table => 'book',
-        column => ['company.location_id as location_id'],
-        where => {'company.name' => 'Orange'},
-        join => [
-            'left outer join company on book.company_id = company.id',
-            'left outer join location on company.location_id = location.id'
-        ]
-    );
-
-In above select, column and where clause contain "company" table,
-the following SQL is created
-
-    select company.location_id as location_id
-    from book
-      left outer join company on book.company_id = company.id
-    where company.name = ?;
-
-You can specify two table by yourself. This is useful when join parser can't parse
-the join clause correctly.
-
-    $dbi->select(
-        table => 'book',
-        column => ['company.location_id as location_id'],
-        where => {'company.name' => 'Orange'},
-        join => [
-            {
-                clause => 'left outer join location on company.location_id = location.id',
-                table => ['company', 'location']
-            }
-        ]
-    );
-
-=item C<primary_key>
-
-    primary_key => 'id'
-    primary_key => ['id1', 'id2']
-
-Primary key. This is used by C<id> option.
-
-=item C<query>
-
-Same as C<execute> method's C<query> option.
-
-=item C<after_build_sql>
-
-Same as C<execute> method's C<after_build_sql> option
-
-=item C<table>
-
-    table => 'book'
-
-Table name.
-
-=item C<type_rule_off>
-
-Same as C<execute> method's C<type_rule_off> option.
-
-=item C<type_rule1_off>
-
-    type_rule1_off => 1
-
-Same as C<execute> method's C<type_rule1_off> option.
-
-=item C<type_rule2_off>
-
-    type_rule2_off => 1
-
-Same as C<execute> method's C<type_rule2_off> option.
-
-=item C<where>
-    
-    # Hash refrence
-    where => {author => 'Ken', 'title' => 'Perl'}
-    
-    # DBIx::Custom::Where object
-    where => $dbi->where(
-        clause => ['and', 'author = :author', 'title like :title'],
-        param  => {author => 'Ken', title => '%Perl%'}
-    );
-    
-    # Array reference 1 (array reference, hash referenc). same as above
-    where => [
-        ['and', 'author = :author', 'title like :title'],
-        {author => 'Ken', title => '%Perl%'}
-    ];    
-    
-    # Array reference 2 (String, hash reference)
-    where => [
-        'title like :title',
-        {title => '%Perl%'}
-    ]
-    
-    # String
-    where => 'title is null'
-
-Where clause.
-    
-=back
-
 =head2 C<update>
 
     $dbi->update({title => 'Perl'}, table  => 'book', where  => {id => 4});
@@ -3347,21 +3261,12 @@ as parameter value.
 
     {date => \"NOW()"}
 
-The following opitons are available.
+B<OPTIONS>
+
+C<update> method use all of C<execute> method's options,
+and use the following new ones.
 
 =over 4
-
-=item C<append>
-
-Same as C<select> method's C<append> option.
-
-=item C<bind_type>
-
-Same as C<execute> method's C<bind_type> option.
-
-=item C<filter>
-
-Same as C<execute> method's C<filter> option.
 
 =item C<id>
 
@@ -3373,7 +3278,7 @@ You can update rows by C<id> and C<primary_key>.
 
     $dbi->update(
         {title => 'Perl', author => 'Ken'}
-        parimary_key => ['id1', 'id2'],
+        primary_key => ['id1', 'id2'],
         id => [4, 5],
         table => 'book'
     );
@@ -3394,21 +3299,6 @@ prefix before table name section
 
     update or replace book
 
-=item C<primary_key>
-
-    primary_key => 'id'
-    primary_key => ['id1', 'id2']
-
-Primary key. This is used by C<id> option.
-
-=item C<query>
-
-Same as C<execute> method's C<query> option.
-
-=item C<after_build_sql>
-
-Same as C<execute> method's C<after_build_sql> option.
-
 =item C<table>
 
     table => 'book'
@@ -3422,22 +3312,6 @@ Table name.
 If this value is set to 1,
 automatically updated timestamp column is set based on
 C<timestamp> attribute's C<update> value.
-
-=item C<type_rule_off>
-
-Same as C<execute> method's C<type_rule_off> option.
-
-=item C<type_rule1_off>
-
-    type_rule1_off => 1
-
-Same as C<execute> method's C<type_rule1_off> option.
-
-=item C<type_rule2_off>
-
-    type_rule2_off => 1
-
-Same as C<execute> method's C<type_rule2_off> option.
 
 =item C<where>
 
@@ -3466,14 +3340,6 @@ is executed, the following SQL is executed.
 
 Execute update statement for all rows.
 Options is same as C<update> method.
-
-=head2 C<update_param>
-
-    my $update_param = $dbi->update_param({title => 'a', age => 2});
-
-Create update parameter tag.
-
-    set title = :title, author = :author
 
 =head2 C<update_or_insert EXPERIMENTAL>
     
@@ -3517,26 +3383,21 @@ select method is used to check the row is already exists.
 
 =head2 C<update_timestamp>
 
-    $dbi->update_timestamp(updated_at => sub { localtime });
-
-Parameter for timestamp columns when C<update> method is executed
-with C<timestamp> option.
-
-=head2 C<where>
-
-    my $where = $dbi->where(
-        clause => ['and', 'title = :title', 'author = :author'],
-        param => {title => 'Perl', author => 'Ken'}
+    $dbi->update_timestamp(
+      updated_at
+        => sub { Time::Piece->localtime->strftime("%Y-%m-%d %H:%M:%S") }
     );
 
-Create a new L<DBIx::Custom::Where> object.
+Timestamp value when C<update> method is executed
+with C<timestamp> option.
 
-=head2 C<setup_model>
+If C<insert_timestamp> is set and C<insert> method is executed
+with C<timestamp> option, column C<update_at>
+is automatically set to the value like "2010-10-11 10:12:54".
 
-    $dbi->setup_model;
-
-Setup all model objects.
-C<columns> of model object is automatically set, parsing database information.
+>|perl|
+$dbi->update($param, table => 'book', timestamp => 1);
+||<
 
 =head2 C<show_datatype>
 
@@ -3567,6 +3428,27 @@ Show type name of the columns of specified table.
     issue_date: date
 
 This type name is used in C<type_rule>'s C<into1> and C<into2>.
+
+=head2 C<values_clause>
+
+    my $values_clause = $dbi->values_clause({title => 'a', age => 2});
+
+Create values clause.
+
+    (title, author) values (title = :title, age = :age);
+
+You can use this in insert statement.
+
+    my $insert_sql = "insert into book $values_clause";
+
+=head2 C<where>
+
+    my $where = $dbi->where(
+        clause => ['and', 'title = :title', 'author = :author'],
+        param => {title => 'Perl', author => 'Ken'}
+    );
+
+Create a new L<DBIx::Custom::Where> object.
 
 =head1 ENVIRONMENTAL VARIABLES
 
