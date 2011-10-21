@@ -1,3 +1,16 @@
+0.1733
+    - select method join option can receive string.
+    - removed DEPRECATED status of select param option
+    - select method where_param option is DEPRECATED!
+      use where => [STRING, PARAM] syntax instead
+    - delete method where_param option is DEPRECATED!
+      use where => [STRING, PARAM] syntax instead
+    - update method where_param option is DEPRECATED!
+      use where => [STRING, PARAM] syntax instead
+    - update method param option is DEPRECATED!
+    - insert method param option is DEPRECATED!
+    - removed argument checking logic because in database performance is more
+      important.
 0.1732
     - removed EXPERIMETNAL flag from like_value
 0.1731

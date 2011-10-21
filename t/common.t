@@ -118,7 +118,7 @@ require MyDBI1;
     sub insert {
         my ($self, $param) = @_;
         
-        return $self->SUPER::insert(param => $param);
+        return $self->SUPER::insert($param);
     }
 
     sub list { shift->select; }
@@ -133,7 +133,7 @@ require MyDBI1;
     sub insert {
         my ($self, $param) = @_;
         
-        return $self->SUPER::insert(param => $param);
+        return $self->SUPER::insert($param);
     }
 
     sub list { shift->select; }
@@ -148,7 +148,7 @@ require MyDBI1;
     sub insert {
         my ($self, $param) = @_;
         
-        return $self->SUPER::insert(param => $param);
+        return $self->SUPER::insert($param);
     }
 
     sub list { shift->select; }
@@ -163,7 +163,7 @@ require MyDBI1;
     sub insert {
         my ($self, $param) = @_;
         
-        return $self->SUPER::insert(param => $param);
+        return $self->SUPER::insert($param);
     }
 
     sub list { shift->select; }
@@ -258,7 +258,7 @@ is_deeply($model->select->all, [{$key1 => 1, $key2 => 2}]);
 test 'DBIx::Custom::Result test';
 $dbi->delete_all(table => $table1);
 $dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
-$dbi->insert(table => $table1, param => {$key1 => 3, $key2 => 4});
+$dbi->insert({$key1 => 3, $key2 => 4}, table => $table1);
 $source = "select $key1, $key2 from $table1";
 $query = $dbi->create_query($source);
 $result = $dbi->execute($query);
@@ -469,9 +469,6 @@ $dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2}, append => '   
 $rows = $dbi->select(table => $table1)->all;
 is_deeply($rows, [{$key1 => 1, $key2 => 2}], 'insert append');
 
-eval{$dbi->insert(table => $table1, noexist => 1)};
-like($@, qr/noexist/, "invalid");
-
 eval{$dbi->insert(table => 'table', param => {';' => 1})};
 like($@, qr/safety/);
 
@@ -626,9 +623,6 @@ is_deeply($rows, [{$key1 => 1, $key2 => 22, $key3 => 3, $key4 => 4, $key5 => 5},
 
 $result = $dbi->update(table => $table1, param => {$key2 => 11}, where => {$key1 => 1}, append => '   ');
 
-eval{$dbi->update(table => $table1, where => {$key1 => 1}, noexist => 1)};
-like($@, qr/noexist/, "invalid");
-
 eval{$dbi->update(table => $table1)};
 like($@, qr/where/, "not contain where");
 
@@ -666,7 +660,7 @@ $dbi->update(table => $table1, param => {$key1 => 3}, where => $where);
 $result = $dbi->select(table => $table1);
 is_deeply($result->all, [{$key1 => 3, $key2 => 2}], 'update() where');
 
-eval{$dbi->update(table => $table1, param => {';' => 1})};
+eval{$dbi->update(table => $table1, param => {';' => 1}, where => {$key1 => 1})};
 like($@, qr/safety/);
 
 eval{$dbi->update(table => $table1, param => {$key1 => 1}, where => {';' => 1})};
@@ -805,9 +799,6 @@ $dbi->delete(table => $table1, where => {$key1 => 1, $key2 => 2});
 $rows = $dbi->select(table => $table1)->all;
 is_deeply($rows, [{$key1 => 3, $key2 => 4}], "delete multi key");
 
-eval{$dbi->delete(table => $table1, where => {$key1 => 1}, noexist => 1)};
-like($@, qr/noexist/, "invalid");
-
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
 $dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
@@ -845,8 +836,7 @@ test 'delete error';
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
 eval{$dbi->delete(table => $table1)};
-like($@, qr/"where" must be specified/,
-         "where key-value pairs not specified");
+like($@, qr/where/, "where key-value pairs not specified");
 
 eval{$dbi->delete(table => $table1, where => {';' => 1})};
 like($@, qr/safety/);
@@ -913,9 +903,6 @@ $rows = $dbi->select(
     relation  => {"$table1.$key1" => "$table2.$key1"}
 )->all;
 is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}], "relation : no exists where");
-
-eval{$dbi->select(table => $table1, noexist => 1)};
-like($@, qr/noexist/, "invalid");
 
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table ${q}table$p") };
@@ -990,9 +977,6 @@ $dbi->execute($create_table1);
     eval{$dbi->execute("select * frm $table1")};
     like($@, qr/Custom.*\.t /s, "fail : verbose");
 }
-
-eval{$dbi->execute('select * from $table1', no_exists => 1)};
-like($@, qr/wrong/, "invald SQL");
 
 $query = $dbi->execute("select * from $table1 where $key1 = :$key1", {}, query => 1);
 $dbi->dbh->disconnect;
@@ -1075,12 +1059,9 @@ $dbi->execute($create_table1);
 }
 {
     local $Carp::Verbose = 1;
-    eval{$dbi->execute('select * frm $table1')};
+    eval{$dbi->execute("select * frm $table1")};
     like($@, qr/Custom.*\.t /s, "fail : verbose");
 }
-
-eval{$dbi->execute('select * from $table1', no_exists => 1)};
-like($@, qr/wrong/, "invald SQL");
 
 $query = $dbi->execute("select * from $table1 where $key1 = :$key1", {}, query => 1);
 $dbi->dbh->disconnect;
@@ -1682,12 +1663,6 @@ is($dbi->{_tags}->{b}->(), 2);
 
 test 'table not specify exception';
 $dbi = DBIx::Custom->connect;
-eval {$dbi->insert};
-like($@, qr/table/);
-eval {$dbi->update};
-like($@, qr/table/);
-eval {$dbi->delete};
-like($@, qr/table/);
 eval {$dbi->select};
 like($@, qr/table/);
 
@@ -2173,6 +2148,16 @@ $rows = $dbi->select(
 )->all;
 is_deeply($rows, [{"${table1}_$key1" => 2, $key2 => 3, $key3 => 5}]);
 
+$rows = $dbi->select(
+    table => $table1,
+    column => "$table1.$key1 as ${table1}_$key1, $key2, $key3",
+    where   => {"$table1.$key2" => 3},
+    join  => "inner join (select * from $table2 where {= $table2.$key3})" . 
+             " $table2 on $table1.$key1 = $table2.$key1",
+    param => {"$table2.$key3" => 5}
+)->all;
+is_deeply($rows, [{"${table1}_$key1" => 2, $key2 => 3, $key3 => 5}]);
+
 test 'select() string where';
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
@@ -2183,6 +2168,20 @@ $rows = $dbi->select(
     table => $table1,
     where => "$key1 = :$key1 and $key2 = :$key2",
     where_param => {$key1 => 1, $key2 => 2}
+)->all;
+is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->insert(table => $table1, param => {$key1 => 2, $key2 => 3});
+$rows = $dbi->select(
+    table => $table1,
+    where => [
+        "$key1 = :$key1 and $key2 = :$key2",
+        {$key1 => 1, $key2 => 2}
+    ]
 )->all;
 is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
 
@@ -2889,7 +2888,7 @@ $rows = [
 ];
 {
     my $query;
-    foreach my $row (@$rows) {
+    for my $row (@$rows) {
       $query ||= $dbi->insert($row, table => $table1, query => 1);
       $dbi->execute($query, $row, filter => {$key7 => sub { $_[0] * 2 }});
     }
@@ -2910,7 +2909,7 @@ $rows = [
 {
     my $query;
     my $sth;
-    foreach my $row (@$rows) {
+    for my $row (@$rows) {
       $query ||= $dbi->insert($row, table => $table1, query => 1);
       $sth ||= $query->sth;
       $sth->execute(map { $row->{$_} } sort keys %$row);
@@ -2932,7 +2931,7 @@ $rows = [
 {
     $model = $dbi->create_model(table => $table1, primary_key => $key1);
     my $query;
-    foreach my $row (@$rows) {
+    for my $row (@$rows) {
       $query ||= $model->insert($row, query => 1);
       $model->execute($query, $row, filter => {$key7 => sub { $_[0] * 2 }});
     }
@@ -4031,16 +4030,6 @@ $rows = $dbi->select(
     join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
 )->all;
 is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
-
-eval {
-    $rows = $dbi->select(
-        table => $table1,
-        column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
-        where   => {"$table1.$key2" => 2},
-        join  => {"$table1.$key1" => "$table2.$key1"}
-    );
-};
-like ($@, qr/array/);
 
 $rows = $dbi->select(
     table => $table1,
