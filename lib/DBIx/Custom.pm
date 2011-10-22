@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1733';
+our $VERSION = '0.1734';
 use 5.008001;
 
 use Carp 'croak';
@@ -363,9 +363,9 @@ sub execute {
     $sql .= $opt{append} if defined $opt{append} && !ref $sql;
     
     # Query
-    my $query = ref $sql
-              ? $sql
-              : $self->_create_query($sql,$opt{after_build_sql} || $opt{sqlfilter});
+    my $query = ref $sql ? $sql
+      : $self->_create_query($sql,$opt{after_build_sql} || $opt{sqlfilter},
+          $opt{reuse_sth});
     
     # Save query
     $self->last_sql($query->sql);
@@ -447,11 +447,9 @@ sub execute {
     my $sth = $query->sth;
     my $affected;
     eval {
-        for (my $i = 0; $i < @$bind; $i++) {
-            my $bind_type = $bind->[$i]->{bind_type};
-            $sth->bind_param($i + 1, $bind->[$i]->{value},
-              $bind_type ? $bind_type : ());
-        }
+        $sth->bind_param($_ + 1, $bind->[$_]->{value},
+            $bind->[$_]->{bind_type} ? $bind->[$_]->{bind_type} : ())
+          for (0 .. @$bind - 1);
         $affected = $sth->execute;
     };
     
@@ -1098,7 +1096,7 @@ sub where { DBIx::Custom::Where->new(dbi => shift, @_) }
 
 sub _create_query {
     
-    my ($self, $source, $after_build_sql) = @_;
+    my ($self, $source, $after_build_sql, $reuse_sth) = @_;
     
     # Cache
     my $cache = $self->cache;
@@ -1155,7 +1153,9 @@ sub _create_query {
     
     # Prepare statement handle
     my $sth;
-    eval { $sth = $self->dbh->prepare($query->{sql})};
+    $sth = $reuse_sth->{$query->{sql}} if $reuse_sth;
+    eval { $sth = $self->dbh->prepare($query->{sql}) } unless $sth;
+    $reuse_sth->{$query->{sql}} = $sth if $reuse_sth;
     
     if ($@) {
         $self->_croak($@, qq{. Following SQL is executed.\n}
@@ -1205,12 +1205,13 @@ sub _create_bind_values {
         $value = $f->($value) if $f;
         
         # Type rule
-        for my $i (1 .. 2) {
-            my $type_filter = $type_filters->{$i};
-            my $tf = $self->{"_into$i"}->{dot}->{$column} || $type_filter->{$column};
-            $value = $tf->($value) if $tf;
-        }
-        
+        my $tf1 = $self->{"_into1"}->{dot}->{$column}
+          || $type_filters->{1}->{$column};
+        $value = $tf1->($value) if $tf1;
+        my $tf2 = $self->{"_into2"}->{dot}->{$column}
+          || $type_filters->{2}->{$column};
+        $value = $tf2->($value) if $tf2;
+       
         # Bind values
         push @$bind, {value => $value, bind_type => $bind_type->{$column}};
         
@@ -1399,10 +1400,7 @@ sub _push_join {
 
 sub _quote {
     my $self = shift;
-    
-    return defined $self->reserved_word_quote ? $self->reserved_word_quote
-         : defined $self->quote ? $self->quote
-         : '';
+    return $self->{reserved_word_quote} || $self->quote || '';
 }
 
 sub _q {
@@ -1870,7 +1868,7 @@ sub _add_relation_table {
 
 =head1 NAME
 
-DBIx::Custom - Execute insert, update, delete, and select statement easily
+DBIx::Custom - DBI extension to execute insert, update, delete, and select easily
 
 =head1 SYNOPSIS
 
@@ -2433,6 +2431,26 @@ The following opitons are available.
 
 =over 4
 
+=item C<after_build_sql> 
+
+You can filter sql after the sql is build.
+
+    after_build_sql => $code_ref
+
+The following one is one example.
+
+    $dbi->select(
+        table => 'book',
+        column => 'distinct(name)',
+        after_build_sql => sub {
+            "select count(*) from ($_[0]) as t1"
+        }
+    );
+
+The following SQL is executed.
+
+    select count(*) from (select distinct(name) from book) as t1;
+
 =item C<append>
 
     append => 'order by name'
@@ -2539,26 +2557,6 @@ and don't forget to sort $row values by $row key asc order.
 
 Priamry key. This is used when C<id> option find primary key.
 
-=item C<after_build_sql> 
-
-You can filter sql after the sql is build.
-
-    after_build_sql => $code_ref
-
-The following one is one example.
-
-    $dbi->select(
-        table => 'book',
-        column => 'distinct(name)',
-        after_build_sql => sub {
-            "select count(*) from ($_[0]) as t1"
-        }
-    );
-
-The following SQL is executed.
-
-    select count(*) from (select distinct(name) from book) as t1;
-
 =item C<table>
     
     table => 'author'
@@ -2582,6 +2580,18 @@ You must set C<table> option.
 Table alias. Key is real table name, value is alias table name.
 If you set C<table_alias>, you can enable C<into1> and C<into2> type rule
 on alias table name.
+
+=item C<reuse_sth EXPERIMENTAL>
+    
+    reuse_sth => $has_ref
+
+Reuse statament handle if the hash reference variable is set.
+    
+    my $sth = {};
+    $dbi->execute($sql, $param, sth => $sth);
+
+This will improved performance when same sql is executed repeatedly
+because generally creating statement handle is slow.
 
 =item C<type_rule_off>
 
@@ -2776,10 +2786,10 @@ See L<DBIx::Custom::Model> to know model features.
 
 =head2 C<insert_timestamp>
 
-$dbi->insert_timestamp(
-  [qw/created_at updated_at/]
-    => sub { Time::Piece->localtime->strftime("%Y-%m-%d %H:%M:%S") }
-);
+    $dbi->insert_timestamp(
+      [qw/created_at updated_at/]
+        => sub { Time::Piece->localtime->strftime("%Y-%m-%d %H:%M:%S") }
+    );
 
 Timestamp value when C<insert> method is executed
 with C<timestamp> option.
@@ -2788,7 +2798,7 @@ If C<insert_timestamp> is set and C<insert> method is executed
 with C<timestamp> option, column C<created_at> and C<update_at>
 is automatically set to the value like "2010-10-11 10:12:54".
 
-$dbi->insert($param, table => 'book', timestamp => 1);
+    $dbi->insert($param, table => 'book', timestamp => 1);
 
 =head2 C<like_value>
 
