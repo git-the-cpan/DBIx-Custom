@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1736';
+our $VERSION = '0.1737';
 use 5.008001;
 
 use Carp 'croak';
@@ -18,9 +18,6 @@ use DBIx::Custom::Mapper;
 use DBIx::Custom::NotExists;
 use Encode qw/encode encode_utf8 decode_utf8/;
 use Scalar::Util qw/weaken/;
-
-use constant DEBUG => $ENV{DBIX_CUSTOM_DEBUG} || 0;
-use constant DEBUG_ENCODING => $ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8';
 
 has [qw/connector dsn password quote user exclude_table user_table_info
         user_column_info/],
@@ -393,7 +390,9 @@ sub execute {
     
     # Convert id to parameter
     if (defined $opt{id}) {
-        my $id_param = $self->_id_to_param($opt{id}, $opt{primary_key}, $main_table);
+        $opt{statement} ||= '';
+        my $id_param = $self->_id_to_param($opt{id}, $opt{primary_key},
+          $opt{statement} eq 'insert' ? undef : $main_table);
         $param = $self->merge_param($id_param, $param);
     }
     
@@ -475,17 +474,16 @@ sub execute {
       . qq{$query->{sql}\n} . _subname) if $@;
     
     # DEBUG message
-    if (DEBUG) {
-        print STDERR "SQL:\n" . $query->sql . "\n";
+    if ($ENV{DBIX_CUSTOM_DEBUG}) {
+        warn "SQL:\n" . $query->sql . "\n";
         my @output;
-        for my $b (@$bind) {
-            my $value = $b->{value};
+        for my $value (@$bind) {
             $value = 'undef' unless defined $value;
-            $value = encode(DEBUG_ENCODING(), $value)
+            $value = encode($ENV{DBIX_CUSTOM_DEBUG_ENCODING} || 'UTF-8', $value)
               if utf8::is_utf8($value);
             push @output, $value;
         }
-        print STDERR "Bind values: " . join(', ', @output) . "\n\n";
+        warn "Bind values: " . join(', ', @output) . "\n\n";
     }
     
     # Not select statement
@@ -581,18 +579,39 @@ sub insert {
     }
     
     # Merge id to parameter
-    $param = $self->merge_param(
-        $self->_id_to_param(delete $opt{id}, $opt{primary_key}), $param)
-      if defined $opt{id};
+    if (defined $opt{id}) {
+        croak "insert primary_key option must be specified with id option"
+          unless $opt{primary_key};
+        $opt{primary_key} = [$opt{primary_key}] unless ref $opt{primary_key};
+        $opt{id} = [$opt{id}] unless ref $opt{id};
+        for (my $i = 0; $i < @{$opt{primary_key}}; $i++) {
+           my $key = $opt{primary_key}->[$i];
+           croak "id already contain in parameter" if exists $param->{$key};
+           $param->{$key} = $opt{id}->[$i];
+        }
+    }
     
     # Insert statement
     my $sql = "insert ";
     $sql .= "$opt{prefix} " if defined $opt{prefix};
     $sql .= "into " . $self->_q($opt{table}) . " "
       . $self->values_clause($param, {wrap => $opt{wrap}}) . " ";
+
+    # Remove id from parameter
+    if (defined $opt{id}) { delete $param->{$_} for @{$opt{primary_key}} }
     
     # Execute query
+    $opt{statement} = 'insert';
     $self->execute($sql, $param, %opt);
+}
+
+sub _merge_id_to_param {
+    my ($self, $id, $primary_keys, $param) = @_;
+    
+    # Create parameter
+    $id = [$id] unless ref $id;
+    
+    return $param;
 }
 
 sub insert_timestamp {
@@ -2618,7 +2637,7 @@ on alias table name.
 
 =item C<reuse EXPERIMENTAL>
     
-    reuse_query => $has_ref
+    reuse => $has_ref
 
 Reuse query object if the hash reference variable is set.
     
