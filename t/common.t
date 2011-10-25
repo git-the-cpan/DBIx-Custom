@@ -577,7 +577,6 @@ $dbi->update_or_insert(
 $row = $dbi->select(id => 1, table => $table1, primary_key => $key1)->one;
 is_deeply($row, {$key1 => 1, $key2 => 2}, "basic");
 
-
 test 'default_bind_filter';
 $dbi->execute("delete from $table1");
 $dbi->register_filter(
@@ -767,6 +766,32 @@ $dbi->update_all(table => $table1, timestamp => 1);
 $result = $dbi->execute("select * from $table1");
 $rows   = $result->all;
 is($rows->[0]->{$key1}, $rows->[0]->{$key2});
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1_2);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2, $key3 => 3, $key4 => 4, $key5 => 5});
+$dbi->insert(table => $table1, param => {$key1 => 6, $key2 => 7, $key3 => 8, $key4 => 9, $key5 => 10});
+$param = {$key2 => 11};
+$dbi->update($param, table => $table1, where => {$key1 => 1});
+is_deeply($param, {$key2 => 11});
+$result = $dbi->execute("select * from $table1 order by $key1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 1, $key2 => 11, $key3 => 3, $key4 => 4, $key5 => 5},
+                  {$key1 => 6, $key2 => 7,  $key3 => 8, $key4 => 9, $key5 => 10}],
+                  "basic");
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1_2);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2, $key3 => 3, $key4 => 4, $key5 => 5});
+$dbi->insert(table => $table1, param => {$key1 => 6, $key2 => 7, $key3 => 8, $key4 => 9, $key5 => 10});
+$param = {$key2 => 11};
+$dbi->update($param, table => $table1, where => {$key2 => 2});
+is_deeply($param, {$key2 => 11});
+$result = $dbi->execute("select * from $table1 order by $key1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 1, $key2 => 11, $key3 => 3, $key4 => 4, $key5 => 5},
+                  {$key1 => 6, $key2 => 7,  $key3 => 8, $key4 => 9, $key5 => 10}],
+                  "basic");
 
 test 'update_all';
 eval { $dbi->execute("drop table $table1") };
@@ -2307,6 +2332,35 @@ $dbi->insert(
 is($dbi->select(table => $table1)->one->{$key1}, 1);
 is($dbi->select(table => $table1)->one->{$key2}, 2);
 is($dbi->select(table => $table1)->one->{$key3}, 3);
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1_2);
+$param = {$key3 => 3, $key2 => 4};
+$dbi->insert(
+    $param,
+    primary_key => [$key1, $key2], 
+    table => $table1,
+    id => [1, 2],
+);
+is($dbi->select(table => $table1)->one->{$key1}, 1);
+is($dbi->select(table => $table1)->one->{$key2}, 4);
+is($dbi->select(table => $table1)->one->{$key3}, 3);
+is_deeply($param, {$key3 => 3, $key2 => 4});
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1_2);
+$param = {$key3 => 3, $key2 => 4};
+$query = $dbi->insert(
+    $param,
+    primary_key => [$key1, $key2], 
+    table => $table1,
+    id => [1, 2],
+    query => 1
+);
+is(ref $query, 'DBIx::Custom::Query');
+is_deeply($param, {$key3 => 3, $key2 => 4});
 
 test 'model insert id and primary_key option';
 $dbi = MyDBI6->connect;

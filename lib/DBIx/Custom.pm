@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1737';
+our $VERSION = '0.1738';
 use 5.008001;
 
 use Carp 'croak';
@@ -241,10 +241,8 @@ sub delete {
       if !$opt{where} && !defined $opt{id} && !$opt{allow_delete_all};
     
     # Where
-    my $where = defined $opt{id}
-           ? $self->_id_to_param(delete $opt{id}, $opt{primary_key}, $opt{table})
-           : $opt{where};
-    my $w = $self->_where_clause_and_param($where, $opt{where_param});
+    my $w = $self->_where_clause_and_param($opt{where}, $opt{where_param},
+      delete $opt{id}, $opt{primary_key}, $opt{table});
 
     # Delete statement
     my $sql = "delete ";
@@ -252,6 +250,7 @@ sub delete {
     $sql .= "from " . $self->_q($opt{table}) . " $w->{clause} ";
     
     # Execute query
+    $opt{statement} = 'delete';
     $self->execute($sql, $w->{param}, %opt);
 }
 
@@ -362,16 +361,40 @@ sub execute {
     my $filter = ref $opt{filter} eq 'ARRAY' ?
       _array_to_hash($opt{filter}) : $opt{filter};
     
+    # Merge second parameter
+    my @cleanup;
+    if (ref $param eq 'ARRAY') {
+        my $param2 = $param->[1];
+        $param = $param->[0];
+        for my $column (keys %$param2) {
+            if (!exists $param->{$column}) {
+                $param->{$column} = $param2->{$column};
+                push @cleanup, $column;
+            }
+            else {
+                delete $param->{$_} for @cleanup;
+                @cleanup = ();
+                $param = $self->merge_param($param, $param2);
+                last;
+            }
+        }
+    }
+    
     # Append
     $sql .= $opt{append} if defined $opt{append} && !ref $sql;
     
     # Query
     my $query;
-    if (ref $sql) { $query = $sql }
+    if (ref $sql) {
+        $query = $sql;
+        warn "execute method receiving query object as first parameter is DEPRECATED!" .
+             "because this is very buggy.";
+    }
     else {
         $query = $opt{reuse}->{$sql} if $opt{reuse};
         $query = $self->_create_query($sql,$opt{after_build_sql} || $opt{sqlfilter})
           unless $query;
+        $query->statement($opt{statement} || '');
         $opt{reuse}->{$sql} = $query if $opt{reuse};
     }
         
@@ -387,13 +410,22 @@ sub execute {
     # Tables
     unshift @$tables, @{$query->{tables} || []};
     my $main_table = @{$tables}[-1];
-    
-    # Convert id to parameter
+
+    # Merge id to parameter
     if (defined $opt{id}) {
-        $opt{statement} ||= '';
-        my $id_param = $self->_id_to_param($opt{id}, $opt{primary_key},
-          $opt{statement} eq 'insert' ? undef : $main_table);
-        $param = $self->merge_param($id_param, $param);
+        croak "execute id option must be specified with primary_key option"
+          unless $opt{primary_key};
+        $opt{primary_key} = [$opt{primary_key}] unless ref $opt{primary_key};
+        $opt{id} = [$opt{id}] unless ref $opt{id};
+        my $statement = $query->statement;
+        for (my $i = 0; $i < @{$opt{primary_key}}; $i++) {
+           my $key = $opt{primary_key}->[$i];
+           $key = "$main_table.$key" if $statement eq 'update' ||
+             $statement eq 'delete' || $statement eq 'select';
+           next if exists $param->{$key};
+           $param->{$key} = $opt{id}->[$i];
+           push @cleanup, $key;1
+        }
     }
     
     # Cleanup tables(DEPRECATED!)
@@ -472,6 +504,10 @@ sub execute {
     
     $self->_croak($@, qq{. Following SQL is executed.\n}
       . qq{$query->{sql}\n} . _subname) if $@;
+
+    # Remove id from parameter
+    delete $param->{$_} for @cleanup;
+
     
     # DEBUG message
     if ($ENV{DBIX_CUSTOM_DEBUG}) {
@@ -579,15 +615,18 @@ sub insert {
     }
     
     # Merge id to parameter
+    my @cleanup;
+    my $id_param = {};
     if (defined $opt{id}) {
-        croak "insert primary_key option must be specified with id option"
+        croak "insert id option must be specified with primary_key option"
           unless $opt{primary_key};
         $opt{primary_key} = [$opt{primary_key}] unless ref $opt{primary_key};
         $opt{id} = [$opt{id}] unless ref $opt{id};
         for (my $i = 0; $i < @{$opt{primary_key}}; $i++) {
            my $key = $opt{primary_key}->[$i];
-           croak "id already contain in parameter" if exists $param->{$key};
+           next if exists $param->{$key};
            $param->{$key} = $opt{id}->[$i];
+           push @cleanup, $key;
         }
     }
     
@@ -598,7 +637,7 @@ sub insert {
       . $self->values_clause($param, {wrap => $opt{wrap}}) . " ";
 
     # Remove id from parameter
-    if (defined $opt{id}) { delete $param->{$_} for @{$opt{primary_key}} }
+    delete $param->{$_} for @cleanup;
     
     # Execute query
     $opt{statement} = 'insert';
@@ -805,6 +844,8 @@ sub select {
                : [];
     $opt{table} = $tables;
     my $where_param = $opt{where_param} || delete $opt{param} || {};
+    warn "select method where_param option is DEPRECATED!"
+      if $opt{where_param};
     
     # Add relation tables(DEPRECATED!);
     if ($opt{relation}) {
@@ -860,10 +901,8 @@ sub select {
             @{$self->_search_tables(join(' ', keys %$where_param) || '')};
     
     # Where
-    my $where = defined $opt{id}
-              ? $self->_id_to_param(delete $opt{id}, $opt{primary_key}, $tables->[-1])
-              : $opt{where};
-    my $w = $self->_where_clause_and_param($where, $where_param);
+    my $w = $self->_where_clause_and_param($opt{where}, $where_param,
+      delete $opt{id}, $opt{primary_key}, $tables->[-1]);
     
     # Add table names in where clause
     unshift @$tables, @{$self->_search_tables($w->{clause})};
@@ -879,6 +918,7 @@ sub select {
       if $opt{relation};
     
     # Execute query
+    $opt{statement} = 'select';
     my $result = $self->execute($sql, $w->{param}, %opt);
     
     $result;
@@ -1033,16 +1073,9 @@ sub update {
     # Assign clause
     my $assign_clause = $self->assign_clause($param, {wrap => $opt{wrap}});
     
-    # Convert id to where parameter
-    my $where = defined $opt{id}
-      ? $self->_id_to_param(delete $opt{id}, $opt{primary_key}, $opt{table})
-      : $opt{where};
-
     # Where
-    my $w = $self->_where_clause_and_param($where, $opt{where_param});
-    
-    # Merge where parameter to parameter
-    $param = $self->merge_param($param, $w->{param}) if keys %{$w->{param}};
+    my $w = $self->_where_clause_and_param($opt{where}, $opt{where_param},
+      delete $opt{id}, $opt{primary_key}, $opt{table});
     
     # Update statement
     my $sql = "update ";
@@ -1050,7 +1083,8 @@ sub update {
     $sql .= $self->_q($opt{table}) . " set $assign_clause $w->{clause} ";
     
     # Execute query
-    $self->execute($sql, $param, %opt);
+    $opt{statement} = 'update';
+    $self->execute($sql, [$param, $w->{param}], %opt);
 }
 
 sub update_all { shift->update(allow_update_all => 1, @_) };
@@ -1509,76 +1543,73 @@ sub _search_tables {
     return $tables;
 }
 
-sub _where_to_obj {
-    my ($self, $where) = @_;
-    
-    my $obj;
-    
-    # Hash
-    if (ref $where eq 'HASH') {
-        my $clause = ['and'];
-        my $q = $self->_quote;
-        for my $column (keys %$where) {
-            my $table;
-            my $c;
-            if ($column =~ /(?:(.*?)\.)?(.*)/) {
-                $table = $1;
-                $c = $2;
-            }
-            
-            my $table_quote;
-            $table_quote = $self->_q($table) if defined $table;
-            my $column_quote = $self->_q($c);
-            $column_quote = $table_quote . '.' . $column_quote
-              if defined $table_quote;
-            push @$clause, "$column_quote = :$column" for keys %$where;
-        }
-        $obj = $self->where(clause => $clause, param => $where);
-    }
-    
-    # DBIx::Custom::Where object
-    elsif (ref $where eq 'DBIx::Custom::Where') {
-        $obj = $where;
-    }
-    
-    # Array
-    elsif (ref $where eq 'ARRAY') {
-        $obj = $self->where(
-            clause => $where->[0],
-            param  => $where->[1]
-        );
-    }
-    
-    # Check where argument
-    croak qq{"where" must be hash reference or DBIx::Custom::Where object}
-        . qq{or array reference, which contains where clause and parameter}
-        . _subname
-      unless ref $obj eq 'DBIx::Custom::Where';
-    
-    return $obj;
-}
-
 sub _where_clause_and_param {
-    my ($self, $where, $param) = @_;
- 
+    my ($self, $where, $where_param, $id, $primary_key, $table) = @_;
+
     $where ||= {};
-    $param ||= {};
+    $where = $self->_id_to_param($id, $primary_key, $table) if defined $id;
+    $where_param ||= {};
     my $w = {};
     my $where_clause = '';
+
+    my $obj;
+    
     if (ref $where eq 'ARRAY' && !ref $where->[0]) {
         $w->{clause} = "where " . $where->[0];
         $w->{param} = $where->[1];
     }
     elsif (ref $where) {
-        $where = $self->_where_to_obj($where);
-        $w->{param} = keys %$param
-                    ? $self->merge_param($param, $where->param)
-                    : $where->param;
-        $w->{clause} = $where->to_string;
+
+        # Hash
+        if (ref $where eq 'HASH') {
+            my $clause = ['and'];
+            my $q = $self->_quote;
+            for my $column (keys %$where) {
+                my $table;
+                my $c;
+                if ($column =~ /(?:(.*?)\.)?(.*)/) {
+                    $table = $1;
+                    $c = $2;
+                }
+                
+                my $table_quote;
+                $table_quote = $self->_q($table) if defined $table;
+                my $column_quote = $self->_q($c);
+                $column_quote = $table_quote . '.' . $column_quote
+                  if defined $table_quote;
+                push @$clause, "$column_quote = :$column" for keys %$where;
+            }
+            $obj = $self->where(clause => $clause, param => $where);
+        }
+        
+        # DBIx::Custom::Where object
+        elsif (ref $where eq 'DBIx::Custom::Where') {
+            $obj = $where;
+        }
+        
+        # Array
+        elsif (ref $where eq 'ARRAY') {
+            $obj = $self->where(
+                clause => $where->[0],
+                param  => $where->[1]
+            );
+        }
+        
+        # Check where argument
+        croak qq{"where" must be hash reference or DBIx::Custom::Where object}
+            . qq{or array reference, which contains where clause and parameter}
+            . _subname
+          unless ref $obj eq 'DBIx::Custom::Where';
+
+
+        $w->{param} = keys %$where_param
+                    ? $self->merge_param($where_param, $obj->param)
+                    : $obj->param;
+        $w->{clause} = $obj->to_string;
     }
     elsif ($where) {
         $w->{clause} = "where $where";
-        $w->{param} = $param;
+        $w->{param} = $where_param;
     }
     
     return $w;
@@ -2572,38 +2603,12 @@ The above is same as the followin one.
     query => 1
 
 C<execute> method return L<DBIx::Custom::Query> object, not executing SQL.
-You can check SQL or get statment handle.
+You can check SQL, column, or get statment handle.
 
     my $sql = $query->sql;
     my $sth = $query->sth;
     my $columns = $query->columns;
     
-If you want to execute SQL fast, you can do the following way.
-
-    my $query;
-    for my $row (@$rows) {
-      $query ||= $dbi->insert($row, table => 'table1', query => 1);
-      $dbi->execute($query, $row);
-    }
-
-Statement handle is reused and SQL parsing is finished,
-so you can get more performance than normal way.
-
-If you want to execute SQL as possible as fast and don't need filtering.
-You can do the following way.
-    
-    my $query;
-    my $sth;
-    for my $row (@$rows) {
-      $query ||= $dbi->insert($row, table => 'book', query => 1);
-      $sth ||= $query->sth;
-      $sth->execute(map { $row->{$_} } sort keys %$row);
-    }
-
-Note that $row must be simple hash reference, such as
-{title => 'Perl', author => 'Ken'}.
-and don't forget to sort $row values by $row key asc order.
-
 =item C<primary_key>
 
     primary_key => 'id'
@@ -3448,6 +3453,8 @@ L<DBIx::Custom>
     execute method's sqlfilter option # will be removed at 2017/1/1
     
     # Others
+    execute($query, ...) # execute method receiving query object.
+                         # this is removed at 2017/1/1
     execute("select * from {= title}"); # execute method's
                                         # tag parsing functionality
                                         # will be removed at 2017/1/1
