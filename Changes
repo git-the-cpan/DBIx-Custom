@@ -1,3 +1,17 @@
+0.1739
+    - insert timestamp option is DEPRECATED!
+      use created_at option with now attribute
+    - update timestamp option is DEPRECATED!
+      use updated_at option wieh now attribute
+    - insert_timestamp method is DEPRECATED!
+      use now method
+    - update_timestamp method is DEPRECATED!
+      use use now method
+    - added EXPEREIMTNAL now method
+    - added EXPERIMENTAL insert created_at option
+    - added EXPERIMETNAL insert updated_at option
+    - added EXPERIMETNAL update updated_at option
+    - added new timestamp system using the above methods and options
 0.1738
     - micro optimization
     - removed example that query pass execute method in documentation

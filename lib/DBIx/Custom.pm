@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1738';
+our $VERSION = '0.1739';
 use 5.008001;
 
 use Carp 'croak';
@@ -52,6 +52,16 @@ has [qw/connector dsn password quote user exclude_table user_table_info
     },
     last_sql => '',
     models => sub { {} },
+    now => sub {
+        sub {
+            my ($sec, $min, $hour, $mday, $mon, $year) = localtime;
+            $mon++;
+            $year += 1900;
+            my $now = sprintf("%04d-%02d-%02d %02d:%02d:%02d",
+              $year, $mon, $mday, $hour, $min, $sec);
+            return $now;
+        }
+    },
     query_builder => sub {
         my $self = shift;
         my $builder = DBIx::Custom::QueryBuilder->new(dbi => $self);
@@ -152,7 +162,7 @@ sub column {
     my $table = $option->{alias} || $real_table;
     
     # Columns
-    unless ($columns) {
+    unless (defined $columns) {
         $columns ||= $self->model($real_table)->columns;
     }
     
@@ -363,6 +373,7 @@ sub execute {
     
     # Merge second parameter
     my @cleanup;
+    my $saved_param;
     if (ref $param eq 'ARRAY') {
         my $param2 = $param->[1];
         $param = $param->[0];
@@ -374,7 +385,9 @@ sub execute {
             else {
                 delete $param->{$_} for @cleanup;
                 @cleanup = ();
+                $saved_param  = $param;
                 $param = $self->merge_param($param, $param2);
+                delete $saved_param->{$_} for (@{$opt{cleanup} || []});
                 last;
             }
         }
@@ -506,8 +519,7 @@ sub execute {
       . qq{$query->{sql}\n} . _subname) if $@;
 
     # Remove id from parameter
-    delete $param->{$_} for @cleanup;
-
+    delete $param->{$_} for (@cleanup, @{$opt{cleanup} || []});
     
     # DEBUG message
     if ($ENV{DBIX_CUSTOM_DEBUG}) {
@@ -605,13 +617,28 @@ sub insert {
     warn "insert method param option is DEPRECATED!" if $opt{param};
     $param ||= delete $opt{param} || {};
     
-    # Timestamp
+    # Timestamp(DEPRECATED!)
     if ($opt{timestamp} && (my $insert_timestamp = $self->insert_timestamp)) {
+        warn "insert timestamp option is DEPRECATED! use created_at with now attribute";
         my $columns = $insert_timestamp->[0];
         $columns = [$columns] unless ref $columns eq 'ARRAY';
         my $value = $insert_timestamp->[1];
         $value = $value->() if ref $value eq 'CODE';
         $param->{$_} = $value for @$columns;
+    }
+
+    # Created time and updated time
+    my @timestamp_cleanup;
+    if (defined $opt{created_at} || defined $opt{updated_at}) {
+        my $now = $self->now->();
+        if (defined $opt{created_at}) {
+            $param->{$opt{created_at}} = $now;
+            push @timestamp_cleanup, $opt{created_at};
+        }
+        if (defined $opt{updated_at}) {
+            $param->{$opt{updated_at}} = $now;
+            push @timestamp_cleanup, $opt{updated_at};
+        }
     }
     
     # Merge id to parameter
@@ -641,6 +668,7 @@ sub insert {
     
     # Execute query
     $opt{statement} = 'insert';
+    $opt{cleanup} = \@timestamp_cleanup;
     $self->execute($sql, $param, %opt);
 }
 
@@ -655,6 +683,8 @@ sub _merge_id_to_param {
 
 sub insert_timestamp {
     my $self = shift;
+    
+    warn "insert_timestamp method is DEPRECATED! use now attribute";
     
     if (@_) {
         $self->{insert_timestamp} = [@_];
@@ -894,7 +924,7 @@ sub select {
     else { $sql .= $self->_q($tables->[-1] || '') . ' ' }
     $sql =~ s/, $/ /;
     croak "select method table option must be specified " . _subname
-      unless $tables->[-1];
+      unless defined $tables->[-1];
 
     # Add tables in parameter
     unshift @$tables,
@@ -1061,13 +1091,21 @@ sub update {
     croak qq{update method where option must be specified } . _subname
       if !$opt{where} && !defined $opt{id} && !$opt{allow_update_all};
     
-    # Timestamp
+    # Timestamp(DEPRECATED!)
     if ($opt{timestamp} && (my $update_timestamp = $self->update_timestamp)) {
+        warn "update timestamp option is DEPRECATED! use updated_at and now method";
         my $columns = $update_timestamp->[0];
         $columns = [$columns] unless ref $columns eq 'ARRAY';
         my $value = $update_timestamp->[1];
         $value = $value->() if ref $value eq 'CODE';
         $param->{$_} = $value for @$columns;
+    }
+
+    # Created time and updated time
+    my @timestamp_cleanup;
+    if (defined $opt{updated_at}) {
+        $param->{$opt{updated_at}} = $self->now->();
+        push @timestamp_cleanup, $opt{updated_at};
     }
 
     # Assign clause
@@ -1084,6 +1122,7 @@ sub update {
     
     # Execute query
     $opt{statement} = 'update';
+    $opt{cleanup} = \@timestamp_cleanup;
     $self->execute($sql, [$param, $w->{param}], %opt);
 }
 
@@ -1127,6 +1166,8 @@ sub update_or_insert {
 
 sub update_timestamp {
     my $self = shift;
+    
+    warn "update_timestamp method is DEPRECATED! use now method";
     
     if (@_) {
         $self->{update_timestamp} = [@_];
@@ -2142,6 +2183,22 @@ Filters, registered by C<register_filter> method.
 
 Get last successed SQL executed by C<execute> method.
 
+=head2 C<now EXPERIMENTAL>
+
+    my $now = $dbi->now;
+    $dbi = $dbi->now($now);
+
+Code reference which return time now, default to the following code reference.
+
+    sub {
+        my ($sec, $min, $hour, $mday, $mon, $year) = localtime;
+        $mon++;
+        $year += 1900;
+        return sprintf("%04d-%02d-%02d %02d:%02d:%02d");
+    }
+
+This return the time like "2011-10-14 05:05:27".
+
 =head2 C<models>
 
     my $models = $dbi->models;
@@ -2735,6 +2792,14 @@ and use the following new ones.
 
 =over 4
 
+=item C<created_at EXPERIMETNAL>
+
+    created_at => 'created_datetime'
+
+Created timestamp column name. time when row is created is set to the column.
+default time format is "YYYY-mm-dd HH:MM:SS", which can be changed by
+C<now> attribute.
+
 =item C<id>
 
     id => 4
@@ -2771,13 +2836,9 @@ prefix before table name section
 
 Table name.
 
-=item C<timestamp>
+=item C<updated_at EXPERIMENTAL>
 
-    timestamp => 1
-
-If this value is set to 1,
-automatically created timestamp column is set based on
-C<timestamp> attribute's C<insert> value.
+This option is same as C<update> method C<updated_at> option.
 
 =item C<wrap>
 
@@ -2842,22 +2903,6 @@ You can get model object by C<model>.
     my $company_model = $dbi->model('company');
 
 See L<DBIx::Custom::Model> to know model features.
-
-=head2 C<insert_timestamp>
-
-    $dbi->insert_timestamp(
-      [qw/created_at updated_at/]
-        => sub { Time::Piece->localtime->strftime("%Y-%m-%d %H:%M:%S") }
-    );
-
-Timestamp value when C<insert> method is executed
-with C<timestamp> option.
-
-If C<insert_timestamp> is set and C<insert> method is executed
-with C<timestamp> option, column C<created_at> and C<update_at>
-is automatically set to the value like "2010-10-11 10:12:54".
-
-    $dbi->insert($param, table => 'book', timestamp => 1);
 
 =head2 C<like_value>
 
@@ -3253,14 +3298,6 @@ prefix before table name section
 
 Table name.
 
-=item C<timestamp>
-
-    timestamp => 1
-
-If this value is set to 1,
-automatically updated timestamp column is set based on
-C<timestamp> attribute's C<update> value.
-
 =item C<where>
 
 Same as C<select> method's C<where> option.
@@ -3279,6 +3316,14 @@ If the following statement
 is executed, the following SQL is executed.
 
     update book set price =  ? + 5;
+
+=item C<updated_at EXPERIMETNAL>
+
+    updated_at => 'updated_datetime'
+
+Updated timestamp column name. time when row is updated is set to the column.
+default time format is C<YYYY-mm-dd HH:MM:SS>, which can be changed by
+C<now> attribute.
 
 =back
 
@@ -3328,24 +3373,6 @@ The following opitons are available adding to C<update> option.
 
 select method option,
 select method is used to check the row is already exists.
-
-=head2 C<update_timestamp>
-
-    $dbi->update_timestamp(
-      updated_at
-        => sub { Time::Piece->localtime->strftime("%Y-%m-%d %H:%M:%S") }
-    );
-
-Timestamp value when C<update> method is executed
-with C<timestamp> option.
-
-If C<insert_timestamp> is set and C<insert> method is executed
-with C<timestamp> option, column C<update_at>
-is automatically set to the value like "2010-10-11 10:12:54".
-
->|perl|
-$dbi->update($param, table => 'book', timestamp => 1);
-||<
 
 =head2 C<show_datatype>
 
@@ -3423,6 +3450,8 @@ L<DBIx::Custom>
     cache_method # will be removed at 2017/1/1
     
     # Methods
+    update_timestamp # will be removed at 2017/1/1
+    insert_timestamp # will be removed at 2017/1/1
     method # will be removed at 2017/1/1
     assign_param # will be removed at 2017/1/1
     update_param # will be removed at 2017/1/1
@@ -3442,6 +3471,8 @@ L<DBIx::Custom>
     update_param_tag # will be removed at 2017/1/1
     
     # Options
+    update timestamp option # will be removed 2017/1/1
+    insert timestamp option # will be removed 2017/1/1
     select method where_param option # will be removed 2017/1/1
     delete method where_param option # will be removed 2017/1/1
     update method where_param option # will be removed 2017/1/1
