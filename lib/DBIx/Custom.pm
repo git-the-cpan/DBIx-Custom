@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1739';
+our $VERSION = '0.1740';
 use 5.008001;
 
 use Carp 'croak';
@@ -131,7 +131,7 @@ sub assign_clause {
     
     my $wrap = $opts->{wrap} || {};
     my $safety = $self->{safety_character} || $self->safety_character;
-    my $qp = $self->_q('');
+    my $qp = $self->q('');
     my $q = substr($qp, 0, 1) || '';
     my $p = substr($qp, 1, 1) || '';
     
@@ -172,8 +172,8 @@ sub column {
     # Column clause
     my @column;
     $columns ||= [];
-    push @column, $self->_q($table) . "." . $self->_q($_) .
-      " as " . $self->_q("${table}${separator}$_")
+    push @column, $self->q($table) . "." . $self->q($_) .
+      " as " . $self->q("${table}${separator}$_")
       for @$columns;
     
     return join (', ', @column);
@@ -257,7 +257,7 @@ sub delete {
     # Delete statement
     my $sql = "delete ";
     $sql .= "$opt{prefix} " if defined $opt{prefix};
-    $sql .= "from " . $self->_q($opt{table}) . " $w->{clause} ";
+    $sql .= "from " . $self->q($opt{table}) . " $w->{clause} ";
     
     # Execute query
     $opt{statement} = 'delete';
@@ -426,11 +426,12 @@ sub execute {
 
     # Merge id to parameter
     if (defined $opt{id}) {
+        my $statement = $query->statement;
+        warn "execute method id option is DEPRECATED!" unless $statement;
         croak "execute id option must be specified with primary_key option"
           unless $opt{primary_key};
         $opt{primary_key} = [$opt{primary_key}] unless ref $opt{primary_key};
         $opt{id} = [$opt{id}] unless ref $opt{id};
-        my $statement = $query->statement;
         for (my $i = 0; $i < @{$opt{primary_key}}; $i++) {
            my $key = $opt{primary_key}->[$i];
            $key = "$main_table.$key" if $statement eq 'update' ||
@@ -630,7 +631,8 @@ sub insert {
     # Created time and updated time
     my @timestamp_cleanup;
     if (defined $opt{created_at} || defined $opt{updated_at}) {
-        my $now = $self->now->();
+        my $now = $self->now;
+        $now = $now->() if ref $now eq 'CODE';
         if (defined $opt{created_at}) {
             $param->{$opt{created_at}} = $now;
             push @timestamp_cleanup, $opt{created_at};
@@ -660,7 +662,7 @@ sub insert {
     # Insert statement
     my $sql = "insert ";
     $sql .= "$opt{prefix} " if defined $opt{prefix};
-    $sql .= "into " . $self->_q($opt{table}) . " "
+    $sql .= "into " . $self->q($opt{table}) . " "
       . $self->values_clause($param, {wrap => $opt{wrap}}) . " ";
 
     # Remove id from parameter
@@ -813,8 +815,8 @@ sub mycolumn {
     # Create column clause
     my @column;
     $columns ||= [];
-    push @column, $self->_q($table) . "." . $self->_q($_) .
-      " as " . $self->_q($_)
+    push @column, $self->q($table) . "." . $self->q($_) .
+      " as " . $self->q($_)
       for @$columns;
     
     return join (', ', @column);
@@ -853,6 +855,29 @@ sub not_exists { DBIx::Custom::NotExists->singleton }
 sub order {
     my $self = shift;
     return DBIx::Custom::Order->new(dbi => $self, @_);
+}
+
+sub q {
+    my ($self, $value, $quotemeta) = @_;
+    
+    my $quote = $self->{reserved_word_quote}
+      || $self->{quote} || $self->quote || '';
+    return "$quote$value$quote"
+      if !$quotemeta && ($quote eq '`' || $quote eq '"');
+    
+    my $q = substr($quote, 0, 1) || '';
+    my $p;
+    if (defined $quote && length $quote > 1) {
+        $p = substr($quote, 1, 1);
+    }
+    else { $p = $q }
+    
+    if ($quotemeta) {
+        $q = quotemeta($q);
+        $p = quotemeta($p);
+    }
+    
+    return "$q$value$p";
 }
 
 sub register_filter {
@@ -898,12 +923,14 @@ sub select {
                 $column = $self->column(%$column) if ref $column eq 'HASH';
             }
             elsif (ref $column eq 'ARRAY') {
+                warn "select column option [COLUMN => ALIAS] syntax is DEPRECATED!" .
+                  "use q method to quote the value";
                 if (@$column == 3 && $column->[1] eq 'as') {
                     warn "[COLUMN, as => ALIAS] is DEPRECATED! use [COLUMN => ALIAS]";
                     splice @$column, 1, 1;
                 }
                 
-                $column = join(' ', $column->[0], 'as', $self->_q($column->[1]));
+                $column = join(' ', $column->[0], 'as', $self->q($column->[1]));
             }
             unshift @$tables, @{$self->_search_tables($column)};
             $sql .= "$column, ";
@@ -917,11 +944,11 @@ sub select {
     if ($opt{relation}) {
         my $found = {};
         for my $table (@$tables) {
-            $sql .= $self->_q($table) . ', ' unless $found->{$table};
+            $sql .= $self->q($table) . ', ' unless $found->{$table};
             $found->{$table} = 1;
         }
     }
-    else { $sql .= $self->_q($tables->[-1] || '') . ' ' }
+    else { $sql .= $self->q($tables->[-1] || '') . ' ' }
     $sql =~ s/, $/ /;
     croak "select method table option must be specified " . _subname
       unless defined $tables->[-1];
@@ -1104,6 +1131,8 @@ sub update {
     # Created time and updated time
     my @timestamp_cleanup;
     if (defined $opt{updated_at}) {
+        my $now = $self->now;
+        $now = $now->() if ref $now eq 'CODE';
         $param->{$opt{updated_at}} = $self->now->();
         push @timestamp_cleanup, $opt{updated_at};
     }
@@ -1118,7 +1147,7 @@ sub update {
     # Update statement
     my $sql = "update ";
     $sql .= "$opt{prefix} " if defined $opt{prefix};
-    $sql .= $self->_q($opt{table}) . " set $assign_clause $w->{clause} ";
+    $sql .= $self->q($opt{table}) . " set $assign_clause $w->{clause} ";
     
     # Execute query
     $opt{statement} = 'update';
@@ -1129,39 +1158,13 @@ sub update {
 sub update_all { shift->update(allow_update_all => 1, @_) };
 
 sub update_or_insert {
-    my $self = shift;
-
-    # Options
-    my $param  = shift;
-    my %opt = @_;
-    my $id = $opt{id};
-    my $primary_key = $opt{primary_key};
-    $primary_key = [$primary_key] unless ref $primary_key eq 'ARRAY';
-    croak "update_or_insert method need primary_key option " .
-          "when id is specified" . _subname
-      if defined $id && !defined $primary_key;
-    my $table  = $opt{table};
-    croak qq{"table" option must be specified } . _subname
-      unless defined $table;
-    my $select_option = $opt{select_option};
-    
-    my $rows = $self->select(table => $table, id => $id,
-        primary_key => $primary_key, %$select_option)->all;
-    
-    croak "selected row count must be one or zero" . _subname
-      if @$rows > 1;
-    
-    my $row = $rows->[0];
-    my @opt = (table => $table);
-    push @opt, id => $id, primary_key => $primary_key if defined $id;
-    push @opt, %opt;
-    
-    if ($row) {
-        return $self->update($param, @opt);
-    }
-    else {
-        return $self->insert($param, @opt);
-    }
+    my ($self, $param, %opt) = @_;
+    croak "update_or_insert method need primary_key and id option "
+      unless defined $opt{id} && defined $opt{primary_key};
+    my $statement_opt = $opt{option} || {};
+    my $row = $self->select(%opt, %{$statement_opt->{select} || {}})->one;
+    return $row ? $self->update($param, %opt, %{$statement_opt->{update} || {}})
+                : $self->insert($param, %opt, %{$statement_opt->{insert} || {}});
 }
 
 sub update_timestamp {
@@ -1184,7 +1187,7 @@ sub values_clause {
     
     # Create insert parameter tag
     my $safety = $self->{safety_character} || $self->safety_character;
-    my $qp = $self->_q('');
+    my $qp = $self->q('');
     my $q = substr($qp, 0, 1) || '';
     my $p = substr($qp, 1, 1) || '';
     
@@ -1528,29 +1531,6 @@ sub _quote {
     return $self->{reserved_word_quote} || $self->quote || '';
 }
 
-sub _q {
-    my ($self, $value, $quotemeta) = @_;
-    
-    my $quote = $self->{reserved_word_quote}
-      || $self->{quote} || $self->quote || '';
-    return "$quote$value$quote"
-      if !$quotemeta && ($quote eq '`' || $quote eq '"');
-    
-    my $q = substr($quote, 0, 1) || '';
-    my $p;
-    if (defined $quote && length $quote > 1) {
-        $p = substr($quote, 1, 1);
-    }
-    else { $p = $q }
-    
-    if ($quotemeta) {
-        $q = quotemeta($q);
-        $p = quotemeta($p);
-    }
-    
-    return "$q$value$p";
-}
-
 sub _remove_duplicate_table {
     my ($self, $tables, $main_table) = @_;
     
@@ -1574,7 +1554,7 @@ sub _search_tables {
     my $tables = [];
     my $safety_character = $self->safety_character;
     my $q = $self->_quote;
-    my $quoted_safety_character_re = $self->_q("?([$safety_character]+)", 1);
+    my $quoted_safety_character_re = $self->q("?([$safety_character]+)", 1);
     my $table_re = $q ? qr/(?:^|[^$safety_character])${quoted_safety_character_re}?\./
                       : qr/(?:^|[^$safety_character])([$safety_character]+)\./;
     while ($source =~ /$table_re/g) {
@@ -1614,8 +1594,8 @@ sub _where_clause_and_param {
                 }
                 
                 my $table_quote;
-                $table_quote = $self->_q($table) if defined $table;
-                my $column_quote = $self->_q($c);
+                $table_quote = $self->q($table) if defined $table;
+                my $column_quote = $self->q($c);
                 $column_quote = $table_quote . '.' . $column_quote
                   if defined $table_quote;
                 push @$clause, "$column_quote = :$column" for keys %$where;
@@ -2633,28 +2613,6 @@ registered by by C<register_filter>.
 This filter is executed before data is saved into database.
 and before type rule filter is executed.
 
-=item C<id>
-
-    id => 4
-    id => [4, 5]
-
-ID corresponding to C<primary_key>.
-You can delete rows by C<id> and C<primary_key>.
-
-    $dbi->execute(
-        "select * from book where id1 = :id1 and id2 = :id2",
-        {},
-        primary_key => ['id1', 'id2'],
-        id => [4, 5],
-    );
-
-The above is same as the followin one.
-
-    $dbi->execute(
-        "select * from book where id1 = :id1 and id2 = :id2",
-        {id1 => 4, id2 => 5}
-    );
-
 =item C<query>
 
     query => 1
@@ -2671,7 +2629,7 @@ You can check SQL, column, or get statment handle.
     primary_key => 'id'
     primary_key => ['id1', 'id2']
 
-Priamry key. This is used when C<id> option find primary key.
+Priamry key. This is used for C<id> option.
 
 =item C<table>
     
@@ -2699,7 +2657,7 @@ on alias table name.
 
 =item C<reuse EXPERIMENTAL>
     
-    reuse => $has_ref
+    reuse => $hash_ref
 
 Reuse query object if the hash reference variable is set.
     
@@ -2756,21 +2714,16 @@ You can set this value to C<user_table_info>.
 =head2 C<helper>
 
     $dbi->helper(
-        update_or_insert => sub {
-            my $self = shift;
-            
-            # Process
-        },
         find_or_create   => sub {
             my $self = shift;
             
             # Process
-        }
+        },
+        ...
     );
 
 Register helper. These helper is called directly from L<DBIx::Custom> object.
 
-    $dbi->update_or_insert;
     $dbi->find_or_create;
 
 =head2 C<insert>
@@ -2968,6 +2921,12 @@ This is used in C<param> of L<DBIx::Custom::Where> .
 
 Create a new L<DBIx::Custom::Order> object.
 
+=head2 C<q EXPERIMENTAL>
+
+    my $quooted = $dbi->q("title");
+
+Quote string by value of C<quote>.
+
 =head2 C<register_filter>
 
     $dbi->register_filter(
@@ -3037,10 +2996,6 @@ column name, second argument is alias.
 Alias is quoted properly and joined.
 
     date(book.register_datetime) as "book.register_date"
-
-=item C<filter>
-
-Same as C<execute> method's C<filter> option.
 
 =item C<id>
 
@@ -3336,34 +3291,48 @@ Options is same as C<update> method.
 
 =head2 C<update_or_insert EXPERIMENTAL>
     
-    # Where
-    $dbi->update_or_insert(
-        {id => 1, title => 'Perl'},
-        table => 'book',
-        where => {id => 1},
-        select_option => {append => 'for update'}
-    );
-    
     # ID
     $dbi->update_or_insert(
         {title => 'Perl'},
         table => 'book',
         id => 1,
         primary_key => 'id',
-        select_option => {append => 'for update'}
+        option => {
+            select => {
+                 append => 'for update'
+            }
+        }
     );
-    
+
 Update or insert.
 
-In both examples, the following SQL is executed.
+C<update_or_insert> method execute C<select> method first to find row.
+If the row is exists, C<update> is executed.
+If not, C<insert> is executed.
 
-    # In case insert
-    insert into book (id, title) values (?, ?)
-    
-    # In case update
-    update book set (id = ?, title = ?) where book.id = ?
+C<OPTIONS>
 
-The following opitons are available adding to C<update> option.
+C<update_or_insert> method use all common option
+in C<select>, C<update>, C<delete>, and has the following new ones.
+
+=over 4
+
+=item C<option>
+
+    option => {
+        select => {
+            append => '...'
+        },
+        insert => {
+            prefix => '...'
+        },
+        update => {
+            filter => {}
+        }
+    }
+
+If you want to pass option to each method,
+you can use C<option> option.
 
 =over 4
 
@@ -3471,6 +3440,8 @@ L<DBIx::Custom>
     update_param_tag # will be removed at 2017/1/1
     
     # Options
+    select column option [COLUMN => ALIAS] syntax # will be removed 2017/1/1
+    execute method id option # will be removed 2017/1/1
     update timestamp option # will be removed 2017/1/1
     insert timestamp option # will be removed 2017/1/1
     select method where_param option # will be removed 2017/1/1

@@ -634,15 +634,14 @@ $dbi->update_or_insert(
 $rows = $dbi->select(id => 1, table => $table1, primary_key => $key1)->all;
 is_deeply($rows, [{$key1 => 1, $key2 => 3}], "basic");
 
-eval { $dbi->execute("drop table $table1") };
-$dbi->execute($create_table1);
-$dbi->update_or_insert(
-    {$key1 => 1, $key2 => 2},
-    table => $table1,
-    where => {$key1 => 1}
-);
-$row = $dbi->select(id => 1, table => $table1, primary_key => $key1)->one;
-is_deeply($row, {$key1 => 1, $key2 => 2}, "basic");
+eval {
+    $dbi->update_or_insert(
+        {$key2 => 3},
+        table => $table1,
+    );
+};
+
+like($@, qr/primary_key/);
 
 test 'default_bind_filter';
 $dbi->execute("delete from $table1");
@@ -4188,6 +4187,28 @@ $rows = $dbi->select(
     column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
     where   => {"$table1.$key2" => 2},
     join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
+)->all;
+is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
+
+$dbi = DBIx::Custom->connect;
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert(table => $table1, param => {$key1 => 1, $key2 => 2});
+$dbi->insert(table => $table1, param => {$key1 => 3, $key2 => 4});
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table2);
+$dbi->insert(table => $table2, param => {$key1 => 1, $key3 => 5});
+eval { $dbi->execute("drop table $table3") };
+$dbi->execute("create table $table3 ($key3 int, $key4 int)");
+$dbi->insert(table => $table3, param => {$key3 => 5, $key4 => 4});
+$rows = $dbi->select(
+    table => $table1,
+    column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
+    where   => {"$table1.$key2" => 2},
+    join  => {
+        clause => "left outer join $table2 on $table1.$key1 = $table2.$key1",
+        table => [$table1, $table2]
+    }
 )->all;
 is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
 

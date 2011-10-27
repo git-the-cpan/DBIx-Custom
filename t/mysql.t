@@ -29,6 +29,7 @@ sub test { print "# $_[0]\n" }
 
 # Varialbes for tests
 my $dbname;
+my $row;
 my $rows;
 my $result;
 
@@ -48,14 +49,34 @@ $dbi->do('create table table1 (key1 varchar(255), key2 varchar(255)) engine=Inno
 test 'update_or_insert';
 $dbi->delete_all(table => 'table1');
 $dbi->update_or_insert(
-    {key1 => 1, key2 => 2},
+    {key2 => 2},
     table => 'table1',
-    where => {key1 => 1},
-    select_option => {append => 'for update'}
+    id => 1,
+    primary_key => 'key1',
+    option => {
+        select => {append => 'for update'},
+        insert => {append => '    #'},
+        update => {append => '     #'}
+    }
 );
 
-my $row = $dbi->select(id => 1, table => 'table1', primary_key => 'key1')->one;
+$row = $dbi->select(id => 1, table => 'table1', primary_key => 'key1')->one;
 is_deeply($row, {key1 => 1, key2 => 2}, "basic");
+
+$dbi->update_or_insert(
+    {key2 => 3},
+    table => 'table1',
+    id => 1,
+    primary_key => 'key1',
+    option => {
+        select => {append => 'for update'},
+        insert => {append => '    #'},
+        update => {append => '     #'}
+    }
+);
+
+$row = $dbi->select(id => 1, table => 'table1', primary_key => 'key1')->one;
+is_deeply($row, {key1 => 1, key2 => 3}, "basic");
 
 # Test memory leaks
 for (1 .. 200) {
