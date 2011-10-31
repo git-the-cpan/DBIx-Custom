@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1741';
+our $VERSION = '0.1742';
 use 5.008001;
 
 use Carp 'croak';
@@ -1765,7 +1765,6 @@ sub select_at {
 
     # Options
     my $primary_keys = delete $opt{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
     my $where = delete $opt{where};
     my $param = delete $opt{param};
     
@@ -1788,7 +1787,6 @@ sub delete_at {
     
     # Options
     my $primary_keys = delete $opt{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
     my $where = delete $opt{where};
     
     # Create where parameter
@@ -1808,7 +1806,6 @@ sub update_at {
     $param = shift if @_ % 2;
     my %opt = @_;
     my $primary_keys = delete $opt{primary_key};
-    $primary_keys = [$primary_keys] unless ref $primary_keys;
     my $where = delete $opt{where};
     my $p = delete $opt{param} || {};
     $param  ||= $p;

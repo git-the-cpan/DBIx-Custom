@@ -1617,12 +1617,6 @@ $row = $result->all;
 is_deeply($row, [{$key1 => 1, $key2 => 2}]);
 
 $where = $dbi->where
-             ->clause("$key1 = :$key1 $key2 = :$key2")
-             ->param({$key1 => 1});
-eval{$where->to_string};
-like($@, qr/one column/);
-
-$where = $dbi->where
              ->clause(['or', ("$key1 = :$key1") x 3])
              ->param({$key1 => [$dbi->not_exists, 1, 3]});
 $result = $dbi->select(
