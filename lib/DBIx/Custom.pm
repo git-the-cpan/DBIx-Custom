@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1742';
+our $VERSION = '0.1743';
 use 5.008001;
 
 use Carp 'croak';
@@ -264,7 +264,7 @@ sub delete {
     $self->execute($sql, $w->{param}, %opt);
 }
 
-sub delete_all { shift->delete(allow_delete_all => 1, @_) }
+sub delete_all { shift->delete(@_, allow_delete_all => 1) }
 
 sub DESTROY {}
 
@@ -1155,7 +1155,7 @@ sub update {
     $self->execute($sql, [$param, $w->{param}], %opt);
 }
 
-sub update_all { shift->update(allow_update_all => 1, @_) };
+sub update_all { shift->update(@_, allow_update_all => 1) };
 
 sub update_or_insert {
     my ($self, $param, %opt) = @_;
@@ -1581,11 +1581,11 @@ sub _where_clause_and_param {
     }
     elsif (ref $where) {
 
-        # Hash
         if (ref $where eq 'HASH') {
             my $clause = ['and'];
-            my $q = $self->_quote;
+            my $column_join = '';
             for my $column (keys %$where) {
+                $column_join .= $column;
                 my $table;
                 my $c;
                 if ($column =~ /(?:(.*?)\.)?(.*)/) {
@@ -1598,22 +1598,23 @@ sub _where_clause_and_param {
                 my $column_quote = $self->q($c);
                 $column_quote = $table_quote . '.' . $column_quote
                   if defined $table_quote;
-                push @$clause, "$column_quote = :$column" for keys %$where;
+                push @$clause, "$column_quote = :$column";
             }
+
+            # Check unsafety column
+            my $safety = $self->safety_character;
+            unless ($column_join =~ /^[$safety\.]+$/) {
+                for my $column (keys %$where) {
+                    croak qq{"$column" is not safety column name } . _subname
+                      unless $column =~ /^[$safety\.]+$/;
+                }
+            }
+            
             $obj = $self->where(clause => $clause, param => $where);
         }
-        
-        # DBIx::Custom::Where object
-        elsif (ref $where eq 'DBIx::Custom::Where') {
-            $obj = $where;
-        }
-        
-        # Array
+        elsif (ref $where eq 'DBIx::Custom::Where') { $obj = $where }
         elsif (ref $where eq 'ARRAY') {
-            $obj = $self->where(
-                clause => $where->[0],
-                param  => $where->[1]
-            );
+            $obj = $self->where(clause => $where->[0], param => $where->[1]);
         }
         
         # Check where argument
@@ -1621,7 +1622,6 @@ sub _where_clause_and_param {
             . qq{or array reference, which contains where clause and parameter}
             . _subname
           unless ref $obj eq 'DBIx::Custom::Where';
-
 
         $w->{param} = keys %$where_param
                     ? $self->merge_param($where_param, $obj->param)
@@ -3462,6 +3462,7 @@ L<DBIx::Custom>
 L<DBIx::Custom::Model>
 
     # Attribute methods
+    execute # will be removed at 2017/1/1
     method # will be removed at 2017/1/1
     filter # will be removed at 2017/1/1
     name # will be removed at 2017/1/1

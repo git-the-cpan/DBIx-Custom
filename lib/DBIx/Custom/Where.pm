@@ -28,14 +28,6 @@ sub new {
 sub to_string {
     my $self = shift;
     
-    # Check if column name is safety character;
-    my $safety = $self->dbi->safety_character;
-    if (ref $self->param eq 'HASH') {
-        for my $column (keys %{$self->param}) {
-            croak qq{"$column" is not safety column name (} . _subname . ")"
-              unless $column =~ /^[$safety\.]+$/;
-        }
-    }
     # Clause
     my $clause = $self->clause;
     $clause = ['and', $clause] unless ref $clause eq 'ARRAY';
@@ -49,15 +41,6 @@ sub to_string {
     $self->{_quote} = $self->dbi->_quote;
     $self->{_tag_parse} = $self->dbi->tag_parse;
     $self->_parse($clause, $where, $count, 'and');
-
-        
-    # Check safety
-    unless (join('', keys %$count) =~ /^[$self->{_safety_character}\.]+$/) {
-        for my $column (keys %$count) {
-            croak qq{"$column" is not safety column name (} . _subname . ")"
-              unless $column =~ /^[$self->{_safety_character}\.]+$/;
-        }
-    }
 
     # Stringify
     unshift @$where, 'where' if @$where;
@@ -109,11 +92,17 @@ sub _parse {
         my $c = $self->{_safety_character};
         
         my $column;
-        if ($clause =~ /(\s|^)\{/ && $self->{_tag_parse}) {
+        if ($self->{_tag_parse} && $clause =~ /(\s|^)\{/) {
             my $columns = $self->dbi->query_builder->build_query($clause)->{columns};
             $column = $columns->[0];
         }
-        else { ($column) = $clause =~ /:([$c\.]+)/ }
+        else {
+            my $sql = $clause;
+            $sql =~ s/([0-9]):/$1\\:/g;
+            if ($sql =~ /[^\\]:([$c\.]+)/s || $sql =~ /^:([$c\.]+)/s) {
+                ($column) = $1;
+            }
+        }
         unless (defined $column) {
             push @$where, $clause;
             $pushed = 1;
