@@ -195,10 +195,16 @@ sub fetch_hash_multi {
     # Fetch multiple rows
     croak 'Row count must be specified ' . _subname
       unless $count;
+    
+    return if $self->{_finished};
+
     my $rows = [];
     for (my $i = 0; $i < $count; $i++) {
         my $row = $self->fetch_hash;
-        last unless $row;
+        unless ($row) {
+            $self->{_finished} = 1;
+            last;
+        }
         push @$rows, $row;
     }
     
@@ -213,11 +219,16 @@ sub fetch_multi {
     croak 'Row count must be specified ' . _subname
       unless $count;
     
+    return if $self->{_finished};
+    
     # Fetch multi rows
     my $rows = [];
     for (my $i = 0; $i < $count; $i++) {
         my $row = $self->fetch;
-        last unless $row;
+        unless ($row) {
+            $self->{_finished} = 1;
+            last;
+        }
         push @$rows, $row;
     }
     

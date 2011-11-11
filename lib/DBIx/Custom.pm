@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1746';
+our $VERSION = '0.1747';
 use 5.008001;
 
 use Carp 'croak';
