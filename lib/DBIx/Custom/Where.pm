@@ -38,7 +38,7 @@ sub to_string {
     my $count = {};
     $self->{_query_builder} = $self->dbi->query_builder;
     $self->{_safety_character} = $self->dbi->safety_character;
-    $self->{_quote} = $self->dbi->_quote;
+    $self->{_quote} = $self->dbi->quote;
     $self->{_tag_parse} = $self->dbi->{tag_parse};
     $self->_parse($clause, $where, $count, 'and');
 
@@ -92,16 +92,10 @@ sub _parse {
         my $c = $self->{_safety_character};
         
         my $column;
-        if ($self->{_tag_parse} && $clause =~ /(\s|^)\{/) {
-            my $columns = $self->dbi->query_builder->build_query($clause)->{columns};
-            $column = $columns->[0];
-        }
-        else {
-            my $sql = $clause;
-            $sql =~ s/([0-9]):/$1\\:/g;
-            if ($sql =~ /[^\\]:([$c\.]+)/s || $sql =~ /^:([$c\.]+)/s) {
-                ($column) = $1;
-            }
+        my $sql = $clause;
+        $sql =~ s/([0-9]):/$1\\:/g;
+        if ($sql =~ /[^\\]:([$c\.]+)/s || $sql =~ /^:([$c\.]+)/s) {
+            $column = $1;
         }
         unless (defined $column) {
             push @$where, $clause;

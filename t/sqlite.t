@@ -27,7 +27,7 @@ use DBIx::Custom;
 
 # Constant
 my $create_table1 = 'create table table1 (key1 varchar, key2 varchar);';
-my $create_table_reserved = 'create table "table" ("select" varchar, "update" varchar)';
+my $create_table_quote = 'create table "table" ("select" varchar, "update" varchar)';
 my $q = '"';
 my $p = '"';
 
@@ -44,9 +44,9 @@ $dbi = DBIx::Custom->connect;
 
 
 ### SQLite only test
-test 'dbi_option default';
+test 'option default';
 $dbi = DBIx::Custom->new;
-is_deeply($dbi->dbi_option, {});
+is_deeply($dbi->option, {});
 
 
 test 'prefix';
@@ -142,13 +142,12 @@ test 'quote';
 $dbi = DBIx::Custom->connect;
 $dbi->quote('"');
 eval { $dbi->execute("drop table ${q}table$p") };
-$dbi->execute($create_table_reserved);
-$dbi->apply_filter('table', select => {out => sub { $_[0] * 2}});
+$dbi->execute($create_table_quote);
 $dbi->insert({select => 1}, table => 'table');
 $dbi->delete(table => 'table', where => {select => 1});
 $result = $dbi->execute("select * from ${q}table$p");
 $rows   = $result->all;
-is_deeply($rows, [], "reserved word");
+is_deeply($rows, [], "quote");
 
 test 'finish statement handle';
 $dbi = DBIx::Custom->connect;
@@ -213,28 +212,9 @@ $result = $dbi->select(table => 'table1');
 eval {$result->fetch_hash_multi};
 like($@, qr/Row count must be specified/, "Not specified row count");
 
-
-test 'type option'; # DEPRECATED!
-$dbi = DBIx::Custom->connect(
-    data_source => 'dbi:SQLite:dbname=:memory:',
-    dbi_option => {
-        $DBD::SQLite::VERSION > 1.26 ? (sqlite_unicode => 1) : (unicode => 1)
-    }
-);
+test 'bind_type option';
 $binary = pack("I3", 1, 2, 3);
-eval { $dbi->execute('drop table table1') };
-$dbi->execute('create table table1(key1, key2)');
-$dbi->insert({key1 => $binary, key2 => 'あ'}, table => 'table1', type => [key1 => DBI::SQL_BLOB]);
-$result = $dbi->select(table => 'table1');
-$row   = $result->one;
-is_deeply($row, {key1 => $binary, key2 => 'あ'}, "basic");
-$result = $dbi->execute('select length(key1) as key1_length from table1');
-$row = $result->one;
-is($row->{key1_length}, length $binary);
-
-test 'bind_type option'; # DEPRECATED!
-$binary = pack("I3", 1, 2, 3);
-eval { $dbi->execute('drop table table1') };
+$dbi = DBIx::Custom->connect(option => {sqlite_unicode => 1});
 $dbi->execute('create table table1(key1, key2)');
 $dbi->insert({key1 => $binary, key2 => 'あ'}, table => 'table1', bind_type => [key1 => DBI::SQL_BLOB]);
 $result = $dbi->select(table => 'table1');
@@ -276,80 +256,41 @@ eval { $dbi->execute('drop table table2') };
 eval { $dbi->execute('drop table table3') };
 $dbi->execute('create table table2 (id, name, table3_id)');
 $dbi->execute('create table table3 (id, name)');
-$dbi->apply_filter('table3',
-  name => {in => sub { uc $_[0] } }
-);
 
 $dbi->insert({id => 1, name => 'a', table3_id => 2}, table => 'table2');
 $dbi->insert({id => 2, name => 'b'}, table => 'table3');
 
 $result = $dbi->select(
-    table => ['table2', 'table3'], relation => {'table2.table3_id' => 'table3.id'},
+    table => 'table2',
+    join => "inner join table3 on table2.table3_id = table3.id",
     column => ['table3.name as table3__name']
 );
-is($result->fetch_first->[0], 'B');
+is($result->fetch_first->[0], 'b');
 
 $result = $dbi->select(
-    table => 'table2', relation => {'table2.table3_id' => 'table3.id'},
+    table => 'table2',
+    join => "inner join table3 on table2.table3_id = table3.id",
     column => ['table3.name as table3__name']
 );
-is($result->fetch_first->[0], 'B');
+is($result->fetch_first->[0], 'b');
 
 $result = $dbi->select(
-    table => 'table2', relation => {'table2.table3_id' => 'table3.id'},
+    table => 'table2',
+    join => "inner join table3 on table2.table3_id = table3.id",
     column => ['table3.name as "table3.name"']
 );
-is($result->fetch_first->[0], 'B');
+is($result->fetch_first->[0], 'b');
 
-test 'reserved_word_quote';
+test 'quote';
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table ${q}table$p") };
-$dbi->reserved_word_quote('"');
-$dbi->execute($create_table_reserved);
-$dbi->apply_filter('table', select => {out => sub { $_[0] * 2}});
-$dbi->apply_filter('table', update => {out => sub { $_[0] * 3}});
+$dbi->quote('"');
+$dbi->execute($create_table_quote);
 $dbi->insert({select => 1}, table => 'table');
 $dbi->update({update => 2}, table => 'table', where => {'table.select' => 1});
 $result = $dbi->execute("select * from ${q}table$p");
 $rows   = $result->all;
-is_deeply($rows, [{select => 2, update => 6}], "reserved word");
-
-test 'limit tag';
-$dbi = DBIx::Custom->connect;
-eval { $dbi->execute('drop table table1') };
-$dbi->execute($create_table1);
-$dbi->insert({key1 => 1, key2 => 2}, table => 'table1');
-$dbi->insert({key1 => 1, key2 => 4}, table => 'table1');
-$dbi->insert({key1 => 1, key2 => 6}, table => 'table1');
-$dbi->register_tag(
-    limit => sub {
-        my ($count, $offset) = @_;
-        
-        my $s = '';
-        $s .= "limit $count";
-        $s .= " offset $offset" if defined $offset;
-        
-        return [$s, []];
-    }
-);
-$rows = $dbi->select(
-  table => 'table1',
-  where => {key1 => 1},
-  append => "order by key2 {limit 1 0}"
-)->all;
-is_deeply($rows, [{key1 => 1, key2 => 2}]);
-$rows = $dbi->select(
-  table => 'table1',
-  where => {key1 => 1},
-  append => "order by key2 {limit 2 1}"
-)->all;
-is_deeply($rows, [{key1 => 1, key2 => 4},{key1 => 1, key2 => 6}]);
-$rows = $dbi->select(
-  table => 'table1',
-  where => {key1 => 1},
-  append => "order by key2 {limit 1}"
-)->all;
-is_deeply($rows, [{key1 => 1, key2 => 2}]);
+is_deeply($rows, [{select => 1, update => 2}]);
 
 test 'join function';
 $dbi = DBIx::Custom->connect;

@@ -1,7 +1,8 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.1747';
+our $VERSION = '0.20_01';
+$VERSION = eval $VERSION;
 use 5.008001;
 
 use Carp 'croak';
@@ -21,21 +22,6 @@ use Scalar::Util qw/weaken/;
 
 has [qw/connector dsn password quote user exclude_table user_table_info
         user_column_info/],
-    cache => 0,
-    cache_method => sub {
-        sub {
-            my $self = shift;
-            
-            $self->{_cached} ||= {};
-            
-            if (@_ > 1) {
-                $self->{_cached}{$_[0]} = $_[1];
-            }
-            else {
-                return $self->{_cached}{$_[0]};
-            }
-        }
-    },
     option => sub { {} },
     default_option => sub {
         {
@@ -129,18 +115,7 @@ sub assign_clause {
     my ($self, $param, $opts) = @_;
     
     my $wrap = $opts->{wrap} || {};
-    my $safety = $self->{safety_character} || $self->safety_character;
-    my $qp = $self->q('');
-    my $q = substr($qp, 0, 1) || '';
-    my $p = substr($qp, 1, 1) || '';
-    
-    # Check unsafety keys
-    unless ((join('', keys %$param) || '') =~ /^[$safety\.]+$/) {
-        for my $column (keys %$param) {
-            croak qq{"$column" is not safety column name } . _subname
-              unless $column =~ /^[$safety\.]+$/;
-        }
-    }
+    my ($q, $p) = split //, $self->q('');
     
     # Assign clause (performance is important)
     join(
@@ -189,7 +164,7 @@ sub connect {
         my $dsn = $self->dsn;
         my $user = $self->user;
         my $password = $self->password;
-        my $option = $self->_option;
+        my $option = $self->option;
         my $connector = DBIx::Connector->new($dsn, $user, $password,
           {%{$self->default_option} , %$option});
         $self->connector($connector);
@@ -227,7 +202,7 @@ sub dbh {
         $self->{dbh} ||= $self->_connect;
         
         # Quote
-        if (!defined $self->reserved_word_quote && !defined $self->quote) {
+        unless (defined $self->quote) {
             my $driver = $self->_driver;
             my $quote =  $driver eq 'odbc' ? '[]'
                        : $driver eq 'ado' ? '[]'
@@ -242,15 +217,13 @@ sub dbh {
 
 sub delete {
     my ($self, %opt) = @_;
-    warn "delete method where_param option is DEPRECATED!"
-      if $opt{where_param};
     
     # Don't allow delete all rows
     croak qq{delete method where or id option must be specified } . _subname
       if !$opt{where} && !defined $opt{id} && !$opt{allow_delete_all};
     
     # Where
-    my $w = $self->_where_clause_and_param($opt{where}, $opt{where_param},
+    my $w = $self->_where_clause_and_param($opt{where}, {},
       delete $opt{id}, $opt{primary_key}, $opt{table});
 
     # Delete statement
@@ -259,7 +232,6 @@ sub delete {
     $sql .= "from " . $self->q($opt{table}) . " $w->{clause} ";
     
     # Execute query
-    $opt{statement} = 'delete';
     $self->execute($sql, $w->{param}, %opt);
 }
 
@@ -274,31 +246,17 @@ sub create_model {
     my $opt = ref $_[0] eq 'HASH' ? $_[0] : {@_};
     $opt->{dbi} = $self;
     my $model_class = delete $opt->{model_class} || 'DBIx::Custom::Model';
-    my $model_name  = delete $opt->{name};
     my $model_table = delete $opt->{table};
-    $model_name ||= $model_table;
     
     # Create model
     my $model = $model_class->new($opt);
     weaken $model->{dbi};
-    $model->name($model_name) unless $model->name;
     $model->table($model_table) unless $model->table;
     
-    # Apply filter(DEPRECATED logic)
-    if ($model->{filter}) {
-        my $filter = ref $model->filter eq 'HASH'
-                   ? [%{$model->filter}]
-                   : $model->filter;
-        $filter ||= [];
-        warn "DBIx::Custom::Model filter method is DEPRECATED!"
-          if @$filter;
-        $self->_apply_filter($model->table, @$filter);
-    }
-    
     # Set model
-    $self->model($model->name, $model);
+    $self->model($model->table, $model);
     
-    return $self->model($model->name);
+    return $self->model($model->table);
 }
 
 sub each_column {
@@ -356,19 +314,11 @@ sub each_table {
 }
 
 sub execute {
-    my $self = shift;
-    my $sql = shift;
+    my ($self, $sql, $param, %opt) = @_;
+    $param ||= {};
 
-    # Options
-    my $param;
-    $param = shift if @_ % 2;
-    my %opt = @_;
-    warn "sqlfilter option is DEPRECATED" if $opt{sqlfilter};
-    $param ||= $opt{param} || {};
     my $tables = $opt{table} || [];
     $tables = [$tables] unless ref $tables eq 'ARRAY';
-    my $filter = ref $opt{filter} eq 'ARRAY' ?
-      _array_to_hash($opt{filter}) : $opt{filter};
     
     # Merge second parameter
     my @cleanup;
@@ -393,128 +343,111 @@ sub execute {
     }
     
     # Append
-    $sql .= $opt{append} if defined $opt{append} && !ref $sql;
+    $sql .= " $opt{append}" if defined $opt{append};
     
     # Query
     my $query;
-    if (ref $sql) {
-        $query = $sql;
-        warn "execute method receiving query object as first parameter is DEPRECATED!" .
-             "because this is very buggy.";
+    $query = $opt{reuse}->{$sql} if $opt{reuse};
+    
+    if ($query) {
+        # Save query
+        $self->{last_sql} = $query->{sql};
     }
     else {
-        $query = $opt{reuse}->{$sql} if $opt{reuse};
-        $query = $self->_create_query($sql,$opt{after_build_sql} || $opt{sqlfilter})
-          unless $query;
-        $query->statement($opt{statement} || '');
+        
+        my $safety = $self->{safety_character} || $self->safety_character;
+        # Check unsafety keys
+        unless ((join('', keys %$param) || '') =~ /^[$safety\.]+$/) {
+            for my $column (keys %$param) {
+                croak qq{"$column" is not safety column name } . _subname
+                  unless $column =~ /^[$safety\.]+$/;
+            }
+        }
+
+        # Query
+        $query = $self->_build_query($sql);
+
+        # After build sql
+        $query->{sql} = $opt{after_build_sql}->($query->{sql})
+          if $opt{after_build_sql};
+            
+        # Save sql
+        $self->{last_sql} = $query->{sql};
+        
+        # Prepare statement handle
+        my $sth;
+        eval { $sth = $self->dbh->prepare($query->{sql}) };
+        
+        if ($@) {
+            $self->_croak($@, qq{. Following SQL is executed.\n}
+              . qq{$query->{sql}\n} . _subname);
+        }
+        
+        # Set statement handle
+        $query->{sth} = $sth;
+        
+        # Save query
         $opt{reuse}->{$sql} = $query if $opt{reuse};
     }
-        
-    # Save query
-    $self->{last_sql} = $query->{sql};
 
     # Return query
-    return $query if $opt{query};
-    
-    # Merge query filter(DEPRECATED!)
-    $filter ||= $query->{filter} || {};
-    
-    # Tables
-    unshift @$tables, @{$query->{tables} || []};
-    my $main_table = @{$tables}[-1];
-
-    # Merge id to parameter
-    if (defined $opt{id}) {
-        my $statement = $query->statement;
-        warn "execute method id option is DEPRECATED!" unless $statement;
-        croak "execute id option must be specified with primary_key option"
-          unless $opt{primary_key};
-        $opt{primary_key} = [$opt{primary_key}] unless ref $opt{primary_key};
-        $opt{id} = [$opt{id}] unless ref $opt{id};
-        for (my $i = 0; $i < @{$opt{primary_key}}; $i++) {
-           my $key = $opt{primary_key}->[$i];
-           $key = "$main_table.$key" if $statement eq 'update' ||
-             $statement eq 'delete' || $statement eq 'select';
-           next if exists $param->{$key};
-           $param->{$key} = $opt{id}->[$i];
-           push @cleanup, $key;1
-        }
+    if ($opt{query}) {
+      delete $param->{$_} for (@cleanup, @{$opt{cleanup} || []});
+      return $query;
     }
     
-    # Cleanup tables(DEPRECATED!)
-    $tables = $self->_remove_duplicate_table($tables, $main_table)
-      if @$tables > 1;
+    # Tables
+    my $main_table = @{$tables}[-1];
     
     # Type rule
     my $type_filters = {};
-    if ($self->{_type_rule_is_called}) {
-        unless ($opt{type_rule_off}) {
-            my $type_rule_off_parts = {
-                1 => $opt{type_rule1_off},
-                2 => $opt{type_rule2_off}
-            };
-            for my $i (1, 2) {
-                unless ($type_rule_off_parts->{$i}) {
-                    $type_filters->{$i} = {};
-                    my $table_alias = $opt{table_alias} || {};
-                    for my $alias (keys %$table_alias) {
-                        my $table = $table_alias->{$alias};
-                        
-                        for my $column (keys %{$self->{"_into$i"}{key}{$table} || {}}) {
-                            $type_filters->{$i}->{"$alias.$column"} = $self->{"_into$i"}{key}{$table}{$column};
-                        }
+    my $type_rule_off = !$self->{_type_rule_is_called} || $opt{type_rule_off};
+    unless ($type_rule_off) {
+        my $type_rule_off_parts = {
+            1 => $opt{type_rule1_off},
+            2 => $opt{type_rule2_off}
+        };
+        for my $i (1, 2) {
+            unless ($type_rule_off_parts->{$i}) {
+                $type_filters->{$i} = {};
+                my $table_alias = $opt{table_alias} || {};
+                for my $alias (keys %$table_alias) {
+                    my $table = $table_alias->{$alias};
+                    
+                    for my $column (keys %{$self->{"_into$i"}{key}{$table} || {}}) {
+                        $type_filters->{$i}->{"$alias.$column"} = $self->{"_into$i"}{key}{$table}{$column};
                     }
-                    $type_filters->{$i} = {%{$type_filters->{$i}}, %{$self->{"_into$i"}{key}{$main_table} || {}}}
-                      if $main_table;
                 }
+                $type_filters->{$i} = {%{$type_filters->{$i}}, %{$self->{"_into$i"}{key}{$main_table} || {}}}
+                  if $main_table;
             }
         }
     }
-    
-    # Applied filter(DEPRECATED!)
-    if ($self->{filter}{on}) {
-        my $applied_filter = {};
-        for my $table (@$tables) {
-            $applied_filter = {
-                %$applied_filter,
-                %{$self->{filter}{out}->{$table} || {}}
-            }
-        }
-        $filter = {%$applied_filter, %$filter};
-    }
-    
-    # Replace filter name to code
-    for my $column (keys %$filter) {
-        my $name = $filter->{$column};
-        if (!defined $name) {
-            $filter->{$column} = undef;
-        }
-        elsif (ref $name ne 'CODE') {
-          croak qq{Filter "$name" is not registered" } . _subname
-            unless exists $self->filters->{$name};
-          $filter->{$column} = $self->filters->{$name};
-        }
-    }
-    
-    # Create bind values
-    my ($bind, $bind_types) = $self->_create_bind_values($param, $query->columns,
-      $filter, $type_filters, $opt{bind_type} || $opt{type} || {});
 
-    # Execute
     my $sth = $query->{sth};
     my $affected;
-    eval {
-        if ($opt{bind_type} || $opt{type}) {
-            $sth->bind_param($_ + 1, $bind->[$_],
-                $bind_types->[$_] ? $bind_types->[$_] : ())
-              for (0 .. @$bind - 1);
-            $affected = $sth->execute;
-        }
-        else {
-            $affected = $sth->execute(@$bind);
-        }
-    };
     
+    # Execute
+    my $bind;
+    my $bind_types;
+    if (!$query->{duplicate} && $type_rule_off &&
+      !$opt{filter} && !$opt{bind_type} && !$ENV{DBIX_CUSTOM_DEBUG}) 
+    {
+        eval { $affected = $sth->execute(map { $param->{$_} } @{$query->{columns}}) };
+    }
+    else {
+        ($bind, $bind_types) = $self->_create_bind_values($param,
+           $query->{columns}, $opt{filter}, $type_filters, $opt{bind_type});
+        eval {
+            if ($opt{bind_type}) {
+                $sth->bind_param($_ + 1, $bind->[$_],
+                    $bind_types->[$_] ? $bind_types->[$_] : ())
+                  for (0 .. @$bind - 1);
+                $affected = $sth->execute;
+            }
+            else { $affected = $sth->execute(@$bind) }
+        };
+    }
     $self->_croak($@, qq{. Following SQL is executed.\n}
       . qq{$query->{sql}\n} . _subname) if $@;
 
@@ -523,7 +456,7 @@ sub execute {
     
     # DEBUG message
     if ($ENV{DBIX_CUSTOM_DEBUG}) {
-        warn "SQL:\n" . $query->sql . "\n";
+        warn "SQL:\n" . $query->{sql} . "\n";
         my @output;
         for my $value (@$bind) {
             $value = 'undef' unless defined $value;
@@ -536,34 +469,16 @@ sub execute {
     
     # Not select statement
     return $affected unless $sth->{NUM_OF_FIELDS};
-
-    # Filter(DEPRECATED!)
-    my $infilter = {};
-    if ($self->{filter}{on}) {
-        $infilter->{in}  = {};
-        $infilter->{end} = {};
-        push @$tables, $main_table if $main_table;
-        for my $table (@$tables) {
-            for my $way (qw/in end/) {
-                $infilter->{$way} = {%{$infilter->{$way}},
-                  %{$self->{filter}{$way}{$table} || {}}};
-            }
-        }
-    }
     
     # Result
-    my $result = $self->result_class->new(
+    return $self->result_class->new(
         sth => $sth,
         dbi => $self,
-        default_filter => $self->{default_in_filter},
-        filter => $infilter->{in} || {},
-        end_filter => $infilter->{end} || {},
         type_rule => {
             from1 => $self->type_rule->{from1},
             from2 => $self->type_rule->{from2}
         },
     );
-    $result;
 }
 
 sub get_table_info {
@@ -609,53 +524,38 @@ sub helper {
 }
 
 sub insert {
-    my $self = shift;
-    
-    # Options
-    my $param = @_ % 2 ? shift : undef;
-    my %opt = @_;
-    warn "insert method param option is DEPRECATED!" if $opt{param};
-    $param ||= delete $opt{param} || {};
-    
-    # Timestamp(DEPRECATED!)
-    if ($opt{timestamp} && (my $insert_timestamp = $self->insert_timestamp)) {
-        warn "insert timestamp option is DEPRECATED! use created_at with now attribute";
-        my $columns = $insert_timestamp->[0];
-        $columns = [$columns] unless ref $columns eq 'ARRAY';
-        my $value = $insert_timestamp->[1];
-        $value = $value->() if ref $value eq 'CODE';
-        $param->{$_} = $value for @$columns;
-    }
+    my ($self, $param, %opt) = @_;
+    $param ||= {};
 
     # Created time and updated time
-    my @timestamp_cleanup;
+    my @cleanup;
     if (defined $opt{created_at} || defined $opt{updated_at}) {
         my $now = $self->now;
         $now = $now->() if ref $now eq 'CODE';
         if (defined $opt{created_at}) {
             $param->{$opt{created_at}} = $now;
-            push @timestamp_cleanup, $opt{created_at};
+            push @cleanup, $opt{created_at};
         }
         if (defined $opt{updated_at}) {
             $param->{$opt{updated_at}} = $now;
-            push @timestamp_cleanup, $opt{updated_at};
+            push @cleanup, $opt{updated_at};
         }
     }
     
     # Merge id to parameter
-    my @cleanup;
     my $id_param = {};
     if (defined $opt{id}) {
         croak "insert id option must be specified with primary_key option"
           unless $opt{primary_key};
         $opt{primary_key} = [$opt{primary_key}] unless ref $opt{primary_key};
         $opt{id} = [$opt{id}] unless ref $opt{id};
-        for (my $i = 0; $i < @{$opt{primary_key}}; $i++) {
+        for (my $i = 0; $i < @{$opt{id}}; $i++) {
            my $key = $opt{primary_key}->[$i];
            next if exists $param->{$key};
            $param->{$key} = $opt{id}->[$i];
            push @cleanup, $key;
         }
+        delete $opt{id};
     }
     
     # Insert statement
@@ -663,27 +563,10 @@ sub insert {
     $sql .= "$opt{prefix} " if defined $opt{prefix};
     $sql .= "into " . $self->q($opt{table}) . " "
       . $self->values_clause($param, {wrap => $opt{wrap}}) . " ";
-
-    # Remove id from parameter
-    delete $param->{$_} for @cleanup;
     
     # Execute query
-    $opt{statement} = 'insert';
-    $opt{cleanup} = \@timestamp_cleanup;
+    $opt{cleanup} = \@cleanup;
     $self->execute($sql, $param, %opt);
-}
-
-sub insert_timestamp {
-    my $self = shift;
-    
-    warn "insert_timestamp method is DEPRECATED! use now attribute";
-    
-    if (@_) {
-        $self->{insert_timestamp} = [@_];
-        
-        return $self;
-    }
-    return $self->{insert_timestamp};
 }
 
 sub include_model {
@@ -721,17 +604,13 @@ sub include_model {
         
         # Load model
         my $model_class;
-        my $model_name;
         my $model_table;
         if (ref $model_info eq 'HASH') {
             $model_class = $model_info->{class};
-            $model_name  = $model_info->{name};
             $model_table = $model_info->{table};
-            
-            $model_name  ||= $model_class;
-            $model_table ||= $model_name;
+            $model_table ||= $model_class;
         }
-        else { $model_class = $model_name = $model_table = $model_info }
+        else { $model_class = $model_table = $model_info }
         my $mclass = "${name_space}::$model_class";
         croak qq{"$mclass" is invalid class name } . _subname
           if $mclass =~ /[^\w:]/;
@@ -743,7 +622,6 @@ sub include_model {
         # Create model
         my $opt = {};
         $opt->{model_class} = $mclass if $mclass;
-        $opt->{name}        = $model_name if $model_name;
         $opt->{table}       = $model_table if $model_table;
         $self->create_model($opt);
     }
@@ -822,24 +700,6 @@ sub new {
           unless $self->can($attr);
     }
 
-    # DEPRECATED
-    $self->{_tags} = {
-        '?'     => \&DBIx::Custom::Tag::placeholder,
-        '='     => \&DBIx::Custom::Tag::equal,
-        '<>'    => \&DBIx::Custom::Tag::not_equal,
-        '>'     => \&DBIx::Custom::Tag::greater_than,
-        '<'     => \&DBIx::Custom::Tag::lower_than,
-        '>='    => \&DBIx::Custom::Tag::greater_than_equal,
-        '<='    => \&DBIx::Custom::Tag::lower_than_equal,
-        'like'  => \&DBIx::Custom::Tag::like,
-        'in'    => \&DBIx::Custom::Tag::in,
-        'insert_param' => \&DBIx::Custom::Tag::insert_param,
-        'update_param' => \&DBIx::Custom::Tag::update_param
-    };
-    
-    # DEPRECATED!
-    $self->{tag_parse} = 1;
-    
     return $self;
 }
 
@@ -853,8 +713,7 @@ sub order {
 sub q {
     my ($self, $value, $quotemeta) = @_;
     
-    my $quote = $self->{reserved_word_quote}
-      || $self->{quote} || $self->quote || '';
+    my $quote = $self->{quote} || $self->quote || '';
     return "$quote$value$quote"
       if !$quotemeta && ($quote eq '`' || $quote eq '"');
     
@@ -887,19 +746,8 @@ sub select {
     my ($self, %opt) = @_;
 
     # Options
-    my $tables = ref $opt{table} eq 'ARRAY' ? $opt{table}
-               : defined $opt{table} ? [$opt{table}]
-               : [];
-    $opt{table} = $tables;
-    my $where_param = $opt{where_param} || delete $opt{param} || {};
-    warn "select method where_param option is DEPRECATED!"
-      if $opt{where_param};
-    
-    # Add relation tables(DEPRECATED!);
-    if ($opt{relation}) {
-        warn "select() relation option is DEPRECATED!";
-        $self->_add_relation_table($tables, $opt{relation});
-    }
+    my $tables = [$opt{table}];
+    my $param = delete $opt{param} || {};
     
     # Select statement
     my $sql = 'select ';
@@ -912,19 +760,7 @@ sub select {
         my $columns
           = ref $opt{column} eq 'ARRAY' ? $opt{column} : [$opt{column}];
         for my $column (@$columns) {
-            if (ref $column eq 'HASH') {
-                $column = $self->column(%$column) if ref $column eq 'HASH';
-            }
-            elsif (ref $column eq 'ARRAY') {
-                warn "select column option [COLUMN => ALIAS] syntax is DEPRECATED!" .
-                  "use q method to quote the value";
-                if (@$column == 3 && $column->[1] eq 'as') {
-                    warn "[COLUMN, as => ALIAS] is DEPRECATED! use [COLUMN => ALIAS]";
-                    splice @$column, 1, 1;
-                }
-                
-                $column = join(' ', $column->[0], 'as', $self->q($column->[1]));
-            }
+            $column = $self->column(%$column) if ref $column eq 'HASH';
             unshift @$tables, @{$self->_search_tables($column)};
             $sql .= "$column, ";
         }
@@ -933,25 +769,17 @@ sub select {
     else { $sql .= '* ' }
     
     # Table
-    $sql .= 'from ';
-    if ($opt{relation}) {
-        my $found = {};
-        for my $table (@$tables) {
-            $sql .= $self->q($table) . ', ' unless $found->{$table};
-            $found->{$table} = 1;
-        }
-    }
-    else { $sql .= $self->q($tables->[-1] || '') . ' ' }
-    $sql =~ s/, $/ /;
     croak "select method table option must be specified " . _subname
       unless defined $tables->[-1];
+    $sql .= 'from ' . $self->q($tables->[-1] || '') . ' ';
+    $sql =~ s/, $/ /;
 
     # Add tables in parameter
     unshift @$tables,
-            @{$self->_search_tables(join(' ', keys %$where_param) || '')};
+            @{$self->_search_tables(join(' ', keys %$param) || '')};
     
     # Where
-    my $w = $self->_where_clause_and_param($opt{where}, $where_param,
+    my $w = $self->_where_clause_and_param($opt{where}, $param,
       delete $opt{id}, $opt{primary_key}, $tables->[-1]);
     
     # Add table names in where clause
@@ -963,12 +791,7 @@ sub select {
     # Add where clause
     $sql .= "$w->{clause} ";
     
-    # Relation(DEPRECATED!);
-    $self->_push_relation(\$sql, $tables, $opt{relation}, $w->{clause} eq '' ? 1 : 0)
-      if $opt{relation};
-    
     # Execute query
-    $opt{statement} = 'select';
     my $result = $self->execute($sql, $w->{param}, %opt);
     
     $result;
@@ -1097,44 +920,27 @@ sub type_rule {
 }
 
 sub update {
-    my $self = shift;
-
-    # Options
-    my $param = @_ % 2 ? shift : undef;
-    my %opt = @_;
-    warn "update param option is DEPRECATED!" if $opt{param};
-    warn "update method where_param option is DEPRECATED!"
-      if $opt{where_param};
-    $param ||= $opt{param} || {};
+    my ($self, $param, %opt) = @_;
+    $param ||= {};
     
     # Don't allow update all rows
     croak qq{update method where option must be specified } . _subname
       if !$opt{where} && !defined $opt{id} && !$opt{allow_update_all};
     
-    # Timestamp(DEPRECATED!)
-    if ($opt{timestamp} && (my $update_timestamp = $self->update_timestamp)) {
-        warn "update timestamp option is DEPRECATED! use updated_at and now method";
-        my $columns = $update_timestamp->[0];
-        $columns = [$columns] unless ref $columns eq 'ARRAY';
-        my $value = $update_timestamp->[1];
-        $value = $value->() if ref $value eq 'CODE';
-        $param->{$_} = $value for @$columns;
-    }
-
     # Created time and updated time
-    my @timestamp_cleanup;
+    my @cleanup;
     if (defined $opt{updated_at}) {
         my $now = $self->now;
         $now = $now->() if ref $now eq 'CODE';
         $param->{$opt{updated_at}} = $self->now->();
-        push @timestamp_cleanup, $opt{updated_at};
+        push @cleanup, $opt{updated_at};
     }
 
     # Assign clause
     my $assign_clause = $self->assign_clause($param, {wrap => $opt{wrap}});
     
     # Where
-    my $w = $self->_where_clause_and_param($opt{where}, $opt{where_param},
+    my $w = $self->_where_clause_and_param($opt{where}, {},
       delete $opt{id}, $opt{primary_key}, $opt{table});
     
     # Update statement
@@ -1143,8 +949,7 @@ sub update {
     $sql .= $self->q($opt{table}) . " set $assign_clause $w->{clause} ";
     
     # Execute query
-    $opt{statement} = 'update';
-    $opt{cleanup} = \@timestamp_cleanup;
+    $opt{cleanup} = \@cleanup;
     $self->execute($sql, [$param, $w->{param}], %opt);
 }
 
@@ -1168,37 +973,13 @@ sub update_or_insert {
     }
 }
 
-sub update_timestamp {
-    my $self = shift;
-    
-    warn "update_timestamp method is DEPRECATED! use now method";
-    
-    if (@_) {
-        $self->{update_timestamp} = [@_];
-        
-        return $self;
-    }
-    return $self->{update_timestamp};
-}
-
 sub values_clause {
     my ($self, $param, $opts) = @_;
     
     my $wrap = $opts->{wrap} || {};
     
-    # Create insert parameter tag
-    my $safety = $self->{safety_character} || $self->safety_character;
-    my $qp = $self->q('');
-    my $q = substr($qp, 0, 1) || '';
-    my $p = substr($qp, 1, 1) || '';
-    
-    # Check unsafety keys
-    unless ((join('', keys %$param) || '') =~ /^[$safety\.]+$/) {
-        for my $column (keys %$param) {
-            croak qq{"$column" is not safety column name } . _subname
-              unless $column =~ /^[$safety\.]+$/;
-        }
-    }
+    # Create insert parameter
+    my ($q, $p) = split //, $self->q('');
     
     # values clause(performance is important)
     '(' .
@@ -1220,62 +1001,39 @@ sub values_clause {
 
 sub where { DBIx::Custom::Where->new(dbi => shift, @_) }
 
+sub _build_query {
+    my ($self, $sql) = @_;
+    
+    $sql ||= '';
+    my $columns = [];
+    my %duplicate;
+    my $duplicate;
+    my $c = $self->{safety_character} || $self->safety_character;
+    # Parameter regex
+    $sql =~ s/([0-9]):/$1\\:/g;
+    while ($sql =~ /(^|.*?[^\\]):([$c\.]+)(?:\{(.*?)\})?(.*)/sg) {
+        push @$columns, $2;
+        $duplicate = 1 if ++$duplicate{$columns->[-1]} > 1;
+        $sql = defined $3 ? "$1$2 $3 ?$4" : "$1?$4";
+    }
+    $sql =~ s/\\:/:/g if index($sql, "\\:") != -1;
+
+    # Create query
+    {sql => $sql, columns => $columns, duplicate => $duplicate};
+}
+
 sub _create_query {
     
     my ($self, $source, $after_build_sql) = @_;
     
-    # Cache
-    my $cache = $self->cache;
-    
     # Query
-    my $query;
-    
-    # Get cached query
-    if ($cache) {
-        
-        # Get query
-        my $q = $self->cache_method->($self, $source);
-        
-        # Create query
-        if ($q) {
-            $query = DBIx::Custom::Query->new($q);
-            $query->{filters} = $self->filters;
-        }
-    }
-    
-    # Create query
-    unless ($query) {
+    my $query = $self->_build_query($source);
 
-        # Create query
-        my $builder = $self->query_builder;
-        $query = $builder->build_query($source);
-
-        # Remove reserved word quote
-        if (my $q = $self->_quote) {
-            $q = quotemeta($q);
-            $_ =~ s/[$q]//g for @{$query->columns}
-        }
-
-        # Save query to cache
-        $self->cache_method->(
-            $self, $source,
-            {
-                sql     => $query->sql, 
-                columns => $query->columns,
-                tables  => $query->{tables} || []
-            }
-        ) if $cache;
-    }
-
-    # Filter SQL
-    if ($after_build_sql) {
-        my $sql = $query->sql;
-        $sql = $after_build_sql->($sql);
-        $query->sql($sql);
-    }
+    # After build sql
+    $query->{sql} = $after_build_sql->($query->{sql}) if $after_build_sql;
         
     # Save sql
-    $self->last_sql($query->sql);
+    $self->{last_sql} = $query->{sql};
     
     # Prepare statement handle
     my $sth;
@@ -1283,14 +1041,11 @@ sub _create_query {
     
     if ($@) {
         $self->_croak($@, qq{. Following SQL is executed.\n}
-                        . qq{$query->{sql}\n} . _subname);
+          . qq{$query->{sql}\n} . _subname);
     }
     
     # Set statement handle
-    $query->sth($sth);
-    
-    # Set filters
-    $query->{filters} = $self->filters;
+    $query->{sth} = $sth;
     
     return $query;
 }
@@ -1298,7 +1053,24 @@ sub _create_query {
 sub _create_bind_values {
     my ($self, $params, $columns, $filter, $type_filters, $bind_type) = @_;
     
+    # Bind type
+    $bind_type ||= {};
     $bind_type = _array_to_hash($bind_type) if ref $bind_type eq 'ARRAY';
+
+    # Replace filter name to code
+    $filter ||= {};
+    $filter = ref $filter eq 'ARRAY' ? _array_to_hash($filter) : $filter;
+    for my $column (keys %$filter) {
+        my $name = $filter->{$column};
+        if (!defined $name) {
+            $filter->{$column} = undef;
+        }
+        elsif (ref $name ne 'CODE') {
+          croak qq{Filter "$name" is not registered" } . _subname
+            unless exists $self->filters->{$name};
+          $filter->{$column} = $self->filters->{$name};
+        }
+    }
     
     # Create bind values
     my @bind;
@@ -1327,9 +1099,7 @@ sub _create_bind_values {
         else { push @bind, $params->{$column} }
         
         # Filter
-        if (my $f = $filter->{$column} || $self->{default_out_filter} || '') {
-            $bind[-1] = $f->($bind[-1]);
-        }
+        $bind[-1] = $filter->{$column}->($bind[-1]) if $filter->{$column};
         
         # Type rule
         if ($self->{_type_rule_is_called}) {
@@ -1378,15 +1148,12 @@ sub _connect {
     my $self = shift;
     
     # Attributes
-    my $dsn = $self->data_source;
-    warn "data_source is DEPRECATED!\n"
-      if $dsn;
-    $dsn ||= $self->dsn;
+    my $dsn = $self->dsn;
     croak qq{"dsn" must be specified } . _subname
       unless $dsn;
     my $user        = $self->user;
     my $password    = $self->password;
-    my $option = $self->_option;
+    my $option = $self->option;
     $option = {%{$self->default_option}, %$option};
     
     # Connect
@@ -1440,16 +1207,6 @@ sub _need_tables {
     }
 }
 
-sub _option {
-    my $self = shift;
-    my $option = {%{$self->dbi_options}, %{$self->dbi_option}, %{$self->option}};
-    warn "dbi_options is DEPRECATED! use option instead\n"
-      if keys %{$self->dbi_options};
-    warn "dbi_option is DEPRECATED! use option instead\n"
-      if keys %{$self->dbi_option};
-    return $option;
-}
-
 sub _push_join {
     my ($self, $sql, $join, $join_tables) = @_;
     
@@ -1482,7 +1239,7 @@ sub _push_join {
             $table2 = $table->[1];
         }
         else {
-            my $q = $self->_quote;
+            my $q = $self->quote || '';
             my $j_clause = (split /\s+on\s+/, $join_clause)[-1];
             $j_clause =~ s/'.+?'//g;
             my $q_re = quotemeta($q);
@@ -1521,11 +1278,6 @@ sub _push_join {
     $$sql .= $tree->{$_}{join} . ' ' for @need_tables;
 }
 
-sub _quote {
-    my $self = shift;
-    return $self->{reserved_word_quote} || $self->quote || '';
-}
-
 sub _remove_duplicate_table {
     my ($self, $tables, $main_table) = @_;
     
@@ -1534,7 +1286,7 @@ sub _remove_duplicate_table {
     delete $tables{$main_table} if $main_table;
     
     my $new_tables = [keys %tables, $main_table ? $main_table : ()];
-    if (my $q = $self->_quote) {
+    if (my $q = $self->quote || '') {
         $q = quotemeta($q);
         $_ =~ s/[$q]//g for @$new_tables;
     }
@@ -1548,7 +1300,7 @@ sub _search_tables {
     # Search tables
     my $tables = [];
     my $safety_character = $self->safety_character;
-    my $q = $self->_quote;
+    my $q = $self->quote;
     my $quoted_safety_character_re = $self->q("?([$safety_character]+)", 1);
     my $table_re = $q ? qr/(?:^|[^$safety_character])${quoted_safety_character_re}?\./
                       : qr/(?:^|[^$safety_character])([$safety_character]+)\./;
@@ -1560,11 +1312,11 @@ sub _search_tables {
 }
 
 sub _where_clause_and_param {
-    my ($self, $where, $where_param, $id, $primary_key, $table) = @_;
+    my ($self, $where, $param, $id, $primary_key, $table) = @_;
 
     $where ||= {};
     $where = $self->_id_to_param($id, $primary_key, $table) if defined $id;
-    $where_param ||= {};
+    $param ||= {};
     my $w = {};
     my $where_clause = '';
 
@@ -1613,360 +1365,17 @@ sub _where_clause_and_param {
             . _subname
           unless ref $obj eq 'DBIx::Custom::Where';
 
-        $w->{param} = keys %$where_param
-                    ? $self->merge_param($where_param, $obj->param)
+        $w->{param} = keys %$param
+                    ? $self->merge_param($param, $obj->param)
                     : $obj->param;
         $w->{clause} = $obj->to_string;
     }
     elsif ($where) {
         $w->{clause} = "where $where";
-        $w->{param} = $where_param;
+        $w->{param} = $param;
     }
     
     return $w;
-}
-
-sub _apply_filter {
-    my ($self, $table, @cinfos) = @_;
-
-    # Initialize filters
-    $self->{filter} ||= {};
-    $self->{filter}{on} = 1;
-    $self->{filter}{out} ||= {};
-    $self->{filter}{in} ||= {};
-    $self->{filter}{end} ||= {};
-    
-    # Usage
-    my $usage = "Usage: \$dbi->apply_filter(" .
-                "TABLE, COLUMN1, {in => INFILTER1, out => OUTFILTER1, end => ENDFILTER1}, " .
-                "COLUMN2, {in => INFILTER2, out => OUTFILTER2, end => ENDFILTER2}, ...)";
-    
-    # Apply filter
-    for (my $i = 0; $i < @cinfos; $i += 2) {
-        
-        # Column
-        my $column = $cinfos[$i];
-        if (ref $column eq 'ARRAY') {
-            for my $c (@$column) {
-                push @cinfos, $c, $cinfos[$i + 1];
-            }
-            next;
-        }
-        
-        # Filter infomation
-        my $finfo = $cinfos[$i + 1] || {};
-        croak "$usage (table: $table) " . _subname
-          unless  ref $finfo eq 'HASH';
-        for my $ftype (keys %$finfo) {
-            croak "$usage (table: $table) " . _subname
-              unless $ftype eq 'in' || $ftype eq 'out' || $ftype eq 'end'; 
-        }
-        
-        # Set filters
-        for my $way (qw/in out end/) {
-        
-            # Filter
-            my $filter = $finfo->{$way};
-            
-            # Filter state
-            my $state = !exists $finfo->{$way} ? 'not_exists'
-                      : !defined $filter        ? 'not_defined'
-                      : ref $filter eq 'CODE'   ? 'code'
-                      : 'name';
-            
-            # Filter is not exists
-            next if $state eq 'not_exists';
-            
-            # Check filter name
-            croak qq{Filter "$filter" is not registered } . _subname
-              if  $state eq 'name'
-               && ! exists $self->filters->{$filter};
-            
-            # Set filter
-            my $f = $state eq 'not_defined' ? undef
-                  : $state eq 'code'        ? $filter
-                  : $self->filters->{$filter};
-            $self->{filter}{$way}{$table}{$column} = $f;
-            $self->{filter}{$way}{$table}{"$table.$column"} = $f;
-            $self->{filter}{$way}{$table}{"${table}__$column"} = $f;
-            $self->{filter}{$way}{$table}{"${table}-$column"} = $f;
-        }
-    }
-    
-    return $self;
-}
-
-# DEPRECATED!
-has 'data_source';
-has dbi_options => sub { {} };
-has filter_check  => 1;
-has 'reserved_word_quote';
-has dbi_option => sub { {} };
-has default_dbi_option => sub {
-    warn "default_dbi_option is DEPRECATED! use default_option instead";
-    return shift->default_option;
-};
-
-# DEPRECATED
-sub tag_parse {
-   my $self = shift;
-   warn "tag_parse is DEPRECATED! use \$ENV{DBIX_CUSTOM_TAG_PARSE} " .
-         "environment variable";
-    if (@_) {
-        $self->{tag_parse} = $_[0];
-        return $self;
-    }
-    return $self->{tag_parse};
-}
-
-# DEPRECATED!
-sub method {
-    warn "method is DEPRECATED! use helper instead";
-    return shift->helper(@_);
-}
-
-# DEPRECATED!
-sub assign_param {
-    my $self = shift;
-    warn "assing_param is DEPRECATED! use assign_clause instead";
-    return $self->assign_clause(@_);
-}
-
-# DEPRECATED
-sub update_param {
-    my ($self, $param, $opts) = @_;
-    
-    warn "update_param is DEPRECATED! use assign_clause instead.";
-    
-    # Create update parameter tag
-    my $tag = $self->assign_clause($param, $opts);
-    $tag = "set $tag" unless $opts->{no_set};
-
-    return $tag;
-}
-
-# DEPRECATED!
-sub create_query {
-    warn "create_query is DEPRECATED! use query option of each method";
-    shift->_create_query(@_);
-}
-
-# DEPRECATED!
-sub apply_filter {
-    my $self = shift;
-    
-    warn "apply_filter is DEPRECATED!";
-    return $self->_apply_filter(@_);
-}
-
-# DEPRECATED!
-sub select_at {
-    my ($self, %opt) = @_;
-
-    warn "select_at is DEPRECATED! use select method id option instead";
-
-    # Options
-    my $primary_keys = delete $opt{primary_key};
-    my $where = delete $opt{where};
-    my $param = delete $opt{param};
-    
-    # Table
-    croak qq{"table" option must be specified } . _subname
-      unless $opt{table};
-    my $table = ref $opt{table} ? $opt{table}->[-1] : $opt{table};
-    
-    # Create where parameter
-    my $where_param = $self->_id_to_param($where, $primary_keys);
-    
-    return $self->select(where => $where_param, %opt);
-}
-
-# DEPRECATED!
-sub delete_at {
-    my ($self, %opt) = @_;
-
-    warn "delete_at is DEPRECATED! use delete method id option instead";
-    
-    # Options
-    my $primary_keys = delete $opt{primary_key};
-    my $where = delete $opt{where};
-    
-    # Create where parameter
-    my $where_param = $self->_id_to_param($where, $primary_keys);
-    
-    return $self->delete(where => $where_param, %opt);
-}
-
-# DEPRECATED!
-sub update_at {
-    my $self = shift;
-
-    warn "update_at is DEPRECATED! use update method id option instead";
-    
-    # Options
-    my $param;
-    $param = shift if @_ % 2;
-    my %opt = @_;
-    my $primary_keys = delete $opt{primary_key};
-    my $where = delete $opt{where};
-    my $p = delete $opt{param} || {};
-    $param  ||= $p;
-    
-    # Create where parameter
-    my $where_param = $self->_id_to_param($where, $primary_keys);
-    
-    return $self->update(where => $where_param, param => $param, %opt);
-}
-
-# DEPRECATED!
-sub insert_at {
-    my $self = shift;
-    
-    warn "insert_at is DEPRECATED! use insert method id option instead";
-    
-    # Options
-    my $param;
-    $param = shift if @_ % 2;
-    my %opt = @_;
-    my $primary_key = delete $opt{primary_key};
-    $primary_key = [$primary_key] unless ref $primary_key;
-    my $where = delete $opt{where};
-    my $p = delete $opt{param} || {};
-    $param  ||= $p;
-    
-    # Create where parameter
-    my $where_param = $self->_id_to_param($where, $primary_key);
-    $param = $self->merge_param($where_param, $param);
-    
-    return $self->insert(param => $param, %opt);
-}
-
-# DEPRECATED!
-sub register_tag {
-    my $self = shift;
-    
-    warn "register_tag is DEPRECATED!";
-    
-    # Merge tag
-    my $tags = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_tags} = {%{$self->{_tags} || {}}, %$tags};
-    
-    return $self;
-}
-
-# DEPRECATED!
-sub register_tag_processor {
-    my $self = shift;
-    warn "register_tag_processor is DEPRECATED!";
-    # Merge tag
-    my $tag_processors = ref $_[0] eq 'HASH' ? $_[0] : {@_};
-    $self->{_tags} = {%{$self->{_tags} || {}}, %{$tag_processors}};
-    return $self;
-}
-
-# DEPRECATED!
-sub default_bind_filter {
-    my $self = shift;
-    
-    warn "default_bind_filter is DEPRECATED!";
-    
-    if (@_) {
-        my $fname = $_[0];
-        
-        if (@_ && !$fname) {
-            $self->{default_out_filter} = undef;
-        }
-        else {
-            croak qq{Filter "$fname" is not registered}
-              unless exists $self->filters->{$fname};
-        
-            $self->{default_out_filter} = $self->filters->{$fname};
-        }
-        return $self;
-    }
-    
-    return $self->{default_out_filter};
-}
-
-# DEPRECATED!
-sub default_fetch_filter {
-    my $self = shift;
-
-    warn "default_fetch_filter is DEPRECATED!";
-    
-    if (@_) {
-        my $fname = $_[0];
-
-        if (@_ && !$fname) {
-            $self->{default_in_filter} = undef;
-        }
-        else {
-            croak qq{Filter "$fname" is not registered}
-              unless exists $self->filters->{$fname};
-        
-            $self->{default_in_filter} = $self->filters->{$fname};
-        }
-        
-        return $self;
-    }
-    
-    return $self->{default_in_filter};
-}
-
-# DEPRECATED!
-sub insert_param {
-    my $self = shift;
-    warn "insert_param is DEPRECATED! use values_clause instead";
-    return $self->values_clause(@_);
-}
-
-# DEPRECATED!
-sub insert_param_tag {
-    warn "insert_param_tag is DEPRECATED! " .
-         "use insert_param instead!";
-    return shift->insert_param(@_);
-}
-
-# DEPRECATED!
-sub update_param_tag {
-    warn "update_param_tag is DEPRECATED! " .
-         "use update_param instead";
-    return shift->update_param(@_);
-}
-# DEPRECATED!
-sub _push_relation {
-    my ($self, $sql, $tables, $relation, $need_where) = @_;
-    
-    if (keys %{$relation || {}}) {
-        $$sql .= $need_where ? 'where ' : 'and ';
-        for my $rcolumn (keys %$relation) {
-            my $table1 = (split (/\./, $rcolumn))[0];
-            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
-            push @$tables, ($table1, $table2);
-            $$sql .= "$rcolumn = " . $relation->{$rcolumn} .  'and ';
-        }
-    }
-    $$sql =~ s/and $/ /;
-}
-
-# DEPRECATED!
-sub _add_relation_table {
-    my ($self, $tables, $relation) = @_;
-    
-    if (keys %{$relation || {}}) {
-        for my $rcolumn (keys %$relation) {
-            my $table1 = (split (/\./, $rcolumn))[0];
-            my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
-            my $table1_exists;
-            my $table2_exists;
-            for my $table (@$tables) {
-                $table1_exists = 1 if $table eq $table1;
-                $table2_exists = 1 if $table eq $table2;
-            }
-            unshift @$tables, $table1 unless $table1_exists;
-            unshift @$tables, $table2 unless $table2_exists;
-        }
-    }
 }
 
 1;
@@ -2247,14 +1656,6 @@ This have effect to C<column> and C<mycolumn> method,
 and C<select> method's column option.
 
 Default to C<.>.
-
-=head2 C<tag_parse>
-
-    my $tag_parse = $dbi->tag_parse(0);
-    $dbi = $dbi->tag_parse;
-
-Enable DEPRECATED tag parsing functionality, default to 1.
-If you want to disable tag parsing functionality, set to 0.
 
 =head2 C<user>
 
@@ -2622,9 +2023,9 @@ and before type rule filter is executed.
 C<execute> method return L<DBIx::Custom::Query> object, not executing SQL.
 You can check SQL, column, or get statment handle.
 
-    my $sql = $query->sql;
-    my $sth = $query->sth;
-    my $columns = $query->columns;
+    my $sql = $query->{sql};
+    my $sth = $query->{sth};
+    my $columns = $query->{columns};
     
 =item C<reuse>
     
@@ -3400,142 +2801,6 @@ executed SQL and bind values are printed to STDERR.
 =head2 C<DBIX_CUSTOM_DEBUG_ENCODING>
 
 DEBUG output encoding. Default to UTF-8.
-
-=head2 C<DBIX_CUSTOM_TAG_PARSE>
-
-If you set DBIX_CUSTOM_TAG_PARSE to 0, tag parsing is off.
-
-=head2 C<DBIX_CUSTOM_DISABLE_MODEL_EXECUTE>
-
-If you set DBIX_CUSTOM_DISABLE_MODEL_EXECUTE to 1,
-L<DBIx::Custom::Model> execute method call L<DBIx::Custom> execute.
-
-=head1 DEPRECATED FUNCTIONALITY
-
-L<DBIx::Custom>
-
-    # Attribute methods
-    tag_parse # will be removed 2017/1/1
-    default_dbi_option # will be removed 2017/1/1
-    dbi_option # will be removed 2017/1/1
-    data_source # will be removed at 2017/1/1
-    dbi_options # will be removed at 2017/1/1
-    filter_check # will be removed at 2017/1/1
-    reserved_word_quote # will be removed at 2017/1/1
-    cache_method # will be removed at 2017/1/1
-    
-    # Methods
-    update_timestamp # will be removed at 2017/1/1
-    insert_timestamp # will be removed at 2017/1/1
-    method # will be removed at 2017/1/1
-    assign_param # will be removed at 2017/1/1
-    update_param # will be removed at 2017/1/1
-    insert_param # will be removed at 2017/1/1
-    create_query # will be removed at 2017/1/1
-    apply_filter # will be removed at 2017/1/1
-    select_at # will be removed at 2017/1/1
-    delete_at # will be removed at 2017/1/1
-    update_at # will be removed at 2017/1/1
-    insert_at # will be removed at 2017/1/1
-    register_tag # will be removed at 2017/1/1
-    default_bind_filter # will be removed at 2017/1/1
-    default_fetch_filter # will be removed at 2017/1/1
-    insert_param_tag # will be removed at 2017/1/1
-    register_tag # will be removed at 2017/1/1
-    register_tag_processor # will be removed at 2017/1/1
-    update_param_tag # will be removed at 2017/1/1
-    
-    # Options
-    select column option [COLUMN => ALIAS] syntax # will be removed 2017/1/1
-    execute method id option # will be removed 2017/1/1
-    update timestamp option # will be removed 2017/1/1
-    insert timestamp option # will be removed 2017/1/1
-    select method where_param option # will be removed 2017/1/1
-    delete method where_param option # will be removed 2017/1/1
-    update method where_param option # will be removed 2017/1/1
-    insert method param option # will be removed at 2017/1/1
-    insert method id option # will be removed at 2017/1/1
-    select method relation option # will be removed at 2017/1/1
-    select method column option [COLUMN, as => ALIAS] format
-      # will be removed at 2017/1/1
-    execute method's sqlfilter option # will be removed at 2017/1/1
-    
-    # Others
-    execute($query, ...) # execute method receiving query object.
-                         # this is removed at 2017/1/1
-    execute("select * from {= title}"); # execute method's
-                                        # tag parsing functionality
-                                        # will be removed at 2017/1/1
-    Query caching # will be removed at 2017/1/1
-
-L<DBIx::Custom::Model>
-
-    # Attribute methods
-    execute # will be removed at 2017/1/1
-    method # will be removed at 2017/1/1
-    filter # will be removed at 2017/1/1
-    name # will be removed at 2017/1/1
-    type # will be removed at 2017/1/1
-
-L<DBIx::Custom::Query>
-    
-    # Attribute methods
-    default_filter # will be removed at 2017/1/1
-    table # will be removed at 2017/1/1
-    filters # will be removed at 2017/1/1
-    
-    # Methods
-    filter # will be removed at 2017/1/1
-
-L<DBIx::Custom::QueryBuilder>
-
-This module is DEPRECATED! # will be removed at 2017/1/1
-    
-    # Attribute methods
-    tags # will be removed at 2017/1/1
-    tag_processors # will be removed at 2017/1/1
-    
-    # Methods
-    register_tag # will be removed at 2017/1/1
-    register_tag_processor # will be removed at 2017/1/1
-    
-    # Others
-    build_query("select * from {= title}"); # tag parsing functionality
-                                            # will be removed at 2017/1/1
-
-L<DBIx::Custom::Result>
-    
-    # Attribute methods
-    filter_check # will be removed at 2017/1/1
-    
-    # Methods
-    filter_on # will be removed at 2017/1/1
-    filter_off # will be removed at 2017/1/1
-    end_filter # will be removed at 2017/1/1
-    remove_end_filter # will be removed at 2017/1/1
-    remove_filter # will be removed at 2017/1/1
-    default_filter # will be removed at 2017/1/1
-
-L<DBIx::Custom::Tag>
-
-    This module is DEPRECATED! # will be removed at 2017/1/1
-
-L<DBIx::Custom::Order>
-
-    # Other
-    prepend method array reference receiving
-      $order->prepend(['book', 'desc']); # will be removed 2017/1/1
-
-=head1 BACKWARDS COMPATIBILITY POLICY
-
-If a functionality is DEPRECATED, you can know it by DEPRECATED warnings
-except for attribute method.
-You can check all DEPRECATED functionalities by document.
-DEPRECATED functionality is removed after five years,
-but if at least one person use the functionality and tell me that thing
-I extend one year each time he tell me it.
-
-EXPERIMENTAL functionality will be changed without warnings.
 
 =head1 BUGS
 

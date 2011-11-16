@@ -6,10 +6,7 @@ lib/DBIx/Custom/Mapper.pm
 lib/DBIx/Custom/Model.pm
 lib/DBIx/Custom/NotExists.pm
 lib/DBIx/Custom/Order.pm
-lib/DBIx/Custom/Query.pm
-lib/DBIx/Custom/QueryBuilder.pm
 lib/DBIx/Custom/Result.pm
-lib/DBIx/Custom/Tag.pm
 lib/DBIx/Custom/Util.pm
 lib/DBIx/Custom/Where.pm
 Makefile.PL
