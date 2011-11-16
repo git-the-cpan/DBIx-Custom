@@ -35,18 +35,18 @@ sub AUTOLOAD {
     }
 }
 
-my @methods = qw/insert update update_all delete delete_all select count/;
+my @methods = qw/insert insert_at update update_at update_all
+  delete delete_at delete_all select select_at count/;
 for my $method (@methods) {
     
     my $code =
          qq/sub {/ .
          qq/my \$self = shift;/ .
-         qq/\$self->dbi->$method(/;
+         qq/\$self->dbi->$method(/ .
+             qq/\@_ % 2 ? shift : (),/;
+
     
-    $code .= qq/shift,/
-      if $method eq  'insert' || $method eq 'update' || $method eq 'update_all';
-    
-    my @attrs = qw/table primary_key bind_type/;
+    my @attrs = qw/table type primary_key bind_type/;
     my @insert_attrs = qw/created_at updated_at/;
     my @update_attrs = qw/updated_at/;
     my @select_attrs = qw/join/;
@@ -83,6 +83,30 @@ sub update_or_insert {
     }
     else {
         croak "selected row must be one " . _subname;
+    }
+}
+
+sub execute {
+    my $self = shift;
+    
+    if ($ENV{DBIX_CUSTOM_DISABLE_MODEL_EXECUTE}) {
+        $self->dbi->execute(@_);
+    }
+    else {
+        warn "DBIx::Custom::Model execute method is DEPRECATED! " .
+             "use DBIx::Custom execute method. " .
+             "If you want to call DBIx::Custom execute method directory from model, " .
+             "set \$ENV{DBIX_CUSTOM_DISABLE_MODEL_EXECUTE} to 1 " .
+             "until DBIx::Custom::Model execute method is removed in the future." ;
+        return $self->dbi->execute(
+            shift,
+            shift,
+            table => $self->table,
+            bind_type => $self->bind_type,
+            primary_key => $self->primary_key,
+            type => $self->type,
+            @_
+        );    
     }
 }
 
@@ -127,6 +151,18 @@ sub new {
     $self->columns;
     
     return $self;
+}
+
+# DEPRECATED!
+has 'filter';
+has 'name';
+has 'type';
+
+
+# DEPRECATED!
+sub method {
+    warn "method method is DEPRECATED! use helper instead";
+    return shift->helper(@_);
 }
 
 1;
