@@ -81,6 +81,7 @@ my $user_column_info;
 my $values_clause;
 my $assign_clause;
 my $reuse;
+my $affected;
 
 require MyDBI1;
 {
@@ -247,6 +248,8 @@ for my $i (1 .. 2) {
 }
 $rows = $dbi->select(table => $table1)->all;
 is_deeply($rows, [{$key1 => 1, $key2 => 2}, {$key1 => 1, $key2 => 2}]);
+ok(keys %$reuse);
+ok((keys %$reuse)[0] !~ /\?/);
 
 # Get user table info
 $dbi = DBIx::Custom->connect;
@@ -265,6 +268,12 @@ $dbi->execute($create_table1);
 $model = $dbi->create_model(table => $table1);
 $model->insert({$key1 => 1, $key2 => 2});
 is_deeply($model->select->all, [{$key1 => 1, $key2 => 2}]);
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$model = $dbi->create_model(table => $table1);
+$model->insert({$key1 => 1, $key2 => 2});
+is_deeply($model->select($key1)->all, [{$key1 => 1}]);
 
 test 'DBIx::Custom::Result test';
 $dbi->delete_all(table => $table1);
@@ -480,7 +489,13 @@ $dbi->insert({$key1 => 1, $key2 => 2}, table => $table1, filter => {$key1 => 'th
 $result = $dbi->execute("select * from $table1");
 $rows   = $result->all;
 is_deeply($rows, [{$key1 => 3, $key2 => 4}], "filter");
+$dbi->delete_all(table => $table1);
+$dbi->insert({$key1 => 1, $key2 => 2}, table => $table1);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 2, $key2 => 4}], "filter");
 $dbi->default_bind_filter(undef);
+
 
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
@@ -661,6 +676,27 @@ eval {
     );
 };
 like($@, qr/one/);
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->update_or_insert(
+    {},
+    table => $table1,
+    primary_key => $key1,
+    id => 1
+);
+$row = $dbi->select(id => 1, table => $table1, primary_key => $key1)->one;
+is($row->{$key1}, 1);
+
+eval { 
+    $affected = $dbi->update_or_insert(
+        {},
+        table => $table1,
+        primary_key => $key1,
+        id => 1
+    );
+};
+is($affected, 0);
 
 test 'model update_or_insert';
 eval { $dbi->execute("drop table $table1") };
@@ -1099,6 +1135,12 @@ $result = $dbi->select(table => 'table', where => {select => 1});
 $rows   = $result->all;
 is_deeply($rows, [{select => 2, update => 2}], "reserved word");
 
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert({$key1 => 1, $key2 => 2}, table => $table1);
+$row = $dbi->select($key1, table => $table1)->one;
+is_deeply($row, {$key1 => 1});
+
 test 'fetch filter';
 eval { $dbi->execute("drop table $table1") };
 $dbi->register_filter(
@@ -1234,7 +1276,7 @@ $dbi->execute($create_table1);
 $source = "select * from $table1 where $key1 = :$key1 and $key2 = :$key2";
 $dbi->execute($source, {}, query => 1);
 is_deeply($dbi->{_cached}->{$source}, 
-          {sql => "select * from $table1 where $key1 = ? and $key2 = ?", columns => [$key1, $key2], tables => []}, "cache");
+          {sql => " select * from $table1 where $key1 = ?  and $key2 = ? ", columns => [$key1, $key2], tables => []}, "cache");
 
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
@@ -3076,10 +3118,10 @@ $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
 $dbi->execute("select * from $table1");
-is($dbi->last_sql, "select * from $table1");
+is($dbi->last_sql, " select * from $table1");
 
 eval{$dbi->execute("aaa")};
-is($dbi->last_sql, 'aaa');
+is($dbi->last_sql, ' aaa');
 
 test 'DBIx::Custom header';
 $dbi = DBIx::Custom->connect;

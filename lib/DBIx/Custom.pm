@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.2100';
+our $VERSION = '0.2101';
 use 5.008001;
 
 use Carp 'croak';
@@ -21,7 +21,7 @@ use Scalar::Util qw/weaken/;
 
 
 has [qw/connector dsn password quote user exclude_table user_table_info
-        user_column_info/],
+        user_column_info safety_character/],
     cache => 0,
     cache_method => sub {
         sub {
@@ -70,7 +70,6 @@ has [qw/connector dsn password quote user exclude_table user_table_info
         return $builder;
     },
     result_class  => 'DBIx::Custom::Result',
-    safety_character => '\w',
     separator => '.',
     stash => sub { {} };
 
@@ -395,12 +394,12 @@ sub execute {
     else {
         $query = $opt{reuse}->{$sql} if $opt{reuse};
         unless ($query) {
-            my $safety = $self->{safety_character} || $self->safety_character;
+            my $c = $self->{safety_character};
             # Check unsafety keys
-            unless ((join('', keys %$param) || '') =~ /^[$safety\.]+$/) {
+            unless ((join('', keys %$param) || '') =~ /^[$c\.]+$/) {
                 for my $column (keys %$param) {
                     croak qq{"$column" is not safety column name } . _subname
-                      unless $column =~ /^[$safety\.]+$/;
+                      unless $column =~ /^[$c\.]+$/;
                 }
             }
             $query = $self->_create_query($sql,$opt{after_build_sql} || $opt{sqlfilter});
@@ -500,8 +499,8 @@ sub execute {
     # Execute
     my $sth = $query->{sth};
     my $affected;
-    if (!$query->{duplicate} && $type_rule_off && !keys %$filter &&
-      !$opt{bind_type} && !$opt{type} && !$ENV{DBIX_CUSTOM_DEBUG})
+    if (!$query->{duplicate} && $type_rule_off && !keys %$filter && !$self->{default_out_filter}
+      && !$opt{bind_type} && !$opt{type} && !$ENV{DBIX_CUSTOM_DEBUG})
     {
         eval { $affected = $sth->execute(map { $param->{$_} } @{$query->{columns}}) };
     }
@@ -829,6 +828,9 @@ sub new {
         croak qq{Invalid attribute: "$attr" } . _subname
           unless $self->can($attr);
     }
+    
+    $self->{safety_character} = 'a-zA-Z0-9_'
+      unless exists $self->{safety_character};
 
     # DEPRECATED
     $self->{_tags} = {
@@ -844,9 +846,8 @@ sub new {
         'insert_param' => \&DBIx::Custom::Tag::insert_param,
         'update_param' => \&DBIx::Custom::Tag::update_param
     };
-    
-    # DEPRECATED!
-    $self->{tag_parse} = 1;
+    $self->{tag_parse} = 1 unless exists $self->{tag_parse};
+    $self->{cache} = 0 unless exists $self->{cache};
     
     return $self;
 }
@@ -892,7 +893,10 @@ sub register_filter {
 }
 
 sub select {
-    my ($self, %opt) = @_;
+    my $self = shift;
+    my $column = shift if @_ % 2;
+    my %opt = @_;
+    $opt{column} = $column if defined $column;
 
     # Options
     my $tables = ref $opt{table} eq 'ARRAY' ? $opt{table}
@@ -1169,6 +1173,7 @@ sub update_or_insert {
         return $self->insert($param, %opt, %{$statement_opt->{insert} || {}});
     }
     elsif (@$rows == 1) {
+        return 0 unless keys %$param;
         return $self->update($param, %opt, %{$statement_opt->{update} || {}});
     }
     else {
@@ -1222,7 +1227,7 @@ sub _create_query {
     my ($self, $source, $after_build_sql) = @_;
     
     # Cache
-    my $cache = $self->cache;
+    my $cache = $self->{cache};
     
     # Query
     my $query;
@@ -1244,26 +1249,35 @@ sub _create_query {
     unless ($query) {
 
         # Create query
-        if (exists $ENV{DBIX_CUSTOM_TAG_PARSE} && !$ENV{DBIX_CUSTOM_TAG_PARSE}) {
-            $source ||= '';
-            my $columns = [];
-            my $c = $self->{safety_character} || $self->safety_character;
+        my $tag_parse = exists $ENV{DBIX_CUSTOM_TAG_PARSE}
+          ? $ENV{DBIX_CUSTOM_TAG_PARSE} : $self->{tag_parse};
+
+        my $sql = " " . $source || '';
+        if ($tag_parse && ($sql =~ /\s\{/)) {
+            $query = $self->query_builder->build_query($sql);
+        }
+        else {
+            my @columns;
+            my $c = $self->{safety_character};
+            my $re = $c eq 'a-zA-Z0-9_'
+              ? qr/(.*?[^\\]):([$c\.]+)(?:\{(.*?)\})?(.*)/so
+              : qr/(.*?[^\\]):([$c\.]+)(?:\{(.*?)\})?(.*)/s;
             my %duplicate;
             my $duplicate;
             # Parameter regex
-            $source =~ s/([0-9]):/$1\\:/g;
-            while ($source =~ /(^|.*?[^\\]):([$c\.]+)(?:\{(.*?)\})?(.*)/sg) {
-                push @$columns, $2;
-                $duplicate = 1 if ++$duplicate{$columns->[-1]} > 1;
-                $source = defined $3 ? "$1$2 $3 ?$4" : "$1?$4";
+            $sql =~ s/([0-9]):/$1\\:/g;
+            my $new_sql = '';
+            while ($sql =~ /$re/) {
+                push @columns, $2;
+                $duplicate = 1 if ++$duplicate{$columns[-1]} > 1;
+                ($new_sql, $sql) = defined $3 ?
+                  ($new_sql . "$1$2 $3 ?", " $4") : ($new_sql . "$1?", " $4");
             }
-            $source =~ s/\\:/:/g if index($source, "\\:") != -1;
+            $new_sql .= $sql;
+            $new_sql =~ s/\\:/:/g if index($new_sql, "\\:") != -1;
 
             # Create query
-            $query = {sql => $source, columns => $columns, duplicate => $duplicate};
-        }
-        else {
-            $query = $self->query_builder->build_query($source);
+            $query = {sql => $new_sql, columns => \@columns, duplicate => $duplicate};
         }
         
         # Save query to cache
@@ -1495,8 +1509,8 @@ sub _push_join {
             $j_clause =~ s/[$q_re]//g;
             
             my @j_clauses = reverse split /\s(and|on)\s/, $j_clause;
-            my $c = $self->safety_character;
-            my $join_re = qr/($c+)\.$c+[^$c].*?($c+)\.$c+/sm;
+            my $c = $self->{safety_character};
+            my $join_re = qr/([$c]+)\.[$c]+[^$c].*?([$c]+)\.[$c]+/sm;
             for my $clause (@j_clauses) {
                 if ($clause =~ $join_re) {
                     $table1 = $1;
@@ -1553,7 +1567,7 @@ sub _search_tables {
     
     # Search tables
     my $tables = [];
-    my $safety_character = $self->safety_character;
+    my $safety_character = $self->{safety_character};
     my $q = $self->_quote;
     my $quoted_safety_character_re = $self->q("?([$safety_character]+)", 1);
     my $table_re = $q ? qr/(?:^|[^$safety_character])${quoted_safety_character_re}?\./
@@ -1598,7 +1612,7 @@ sub _where_clause_and_param {
             }
 
             # Check unsafety column
-            my $safety = $self->safety_character;
+            my $safety = $self->{safety_character};
             unless ($column_join =~ /^[$safety\.]+$/) {
                 for my $column (keys %$where) {
                     croak qq{"$column" is not safety column name } . _subname
@@ -2954,12 +2968,17 @@ Register filters, used by C<filter> option of many methods.
 =head2 C<select>
 
     my $result = $dbi->select(
-        table  => 'book',
         column => ['author', 'title'],
+        table  => 'book',
         where  => {author => 'Ken'},
     );
     
 Execute select statement.
+
+You can pass odd number arguments. first argument is C<column>.
+This is EXPERIMENTAL.
+
+    my $result = $dbi->select(['author', 'title'], table => 'book');
 
 B<OPTIONS>
 
