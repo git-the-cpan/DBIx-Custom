@@ -636,6 +636,37 @@ like($row->{$key2}, qr/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
 like($row->{$key3}, qr/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
 is($row->{$key2}, $row->{$key3});
 
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert([{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}] , table => $table1);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}], "basic");
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1_2);
+$dbi->insert([{$key1 => 1}, {$key1 => 3}] ,
+  table => $table1,
+  updated_at => $key2,
+  created_at => $key3
+);
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is($rows->[0]->{$key1}, 1);
+is($rows->[1]->{$key1}, 3);
+like($rows->[0]->{$key2}, qr/\d{2}:/);
+like($rows->[1]->{$key2}, qr/\d{2}:/);
+like($rows->[0]->{$key3}, qr/\d{2}:/);
+like($rows->[1]->{$key3}, qr/\d{2}:/);
+
+eval { $dbi->execute("drop table $table1") };
+$dbi->execute($create_table1);
+$dbi->insert([{$key1 => 1, $key2 => 2}, {$key1 => 3, $key2 => 4}] ,
+  table => $table1, filter => {$key1 => sub { $_[0] * 2 }});
+$result = $dbi->execute("select * from $table1");
+$rows   = $result->all;
+is_deeply($rows, [{$key1 => 2, $key2 => 2}, {$key1 => 6, $key2 => 4}], "basic");
+
 test 'update_or_insert';
 eval { $dbi->execute("drop table $table1") };
 $dbi->execute($create_table1);
@@ -4562,5 +4593,17 @@ is($dbi->count(table => $table1), 2);
 is($dbi->count(table => $table1, where => {$key2 => 2}), 1);
 $model = $dbi->create_model(table => $table1);
 is($model->count, 2);
+
+eval { $dbi->execute("drop table $table1") };
+eval { $dbi->execute("drop table $table2") };
+$dbi->execute($create_table1);
+$dbi->execute($create_table2);
+$model = $dbi->create_model(table => $table1, primary_key => $key1);
+$model->insert({$key1 => 1, $key2 => 2});
+$model = $dbi->create_model(table => $table2, primary_key => $key1,
+    join => ["left outer join $table1 on $table2.$key1 = $table1.$key1"]);
+$model->insert({$key1 => 1, $key3 => 3});
+is($model->count(id => 1), 1);
+is($model->count(where => {"$table2.$key3" => 3}), 1);
 
 1;
