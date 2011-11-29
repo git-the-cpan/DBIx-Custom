@@ -1,7 +1,7 @@
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.2103';
+our $VERSION = '0.2104';
 use 5.008001;
 
 use Carp 'croak';
@@ -502,12 +502,22 @@ sub execute {
     # Execute
     my $sth = $query->{sth};
     my $affected;
-    if (!$query->{duplicate} && $type_rule_off && !keys %$filter && !$self->{default_out_filter}
+    if ((!$query->{duplicate} || $opt{bulk_insert}) && $type_rule_off
+      && !keys %$filter && !$self->{default_out_filter}
       && !$opt{bind_type} && !$opt{type} && !$ENV{DBIX_CUSTOM_DEBUG})
     {
         eval {
-            for my $param (@$params) {
-                $affected = $sth->execute(map { $param->{$_} } @{$query->{columns}});
+            if ($opt{bulk_insert}) {
+                my %count;
+                my $param = $params->[0];
+                $affected = $sth->execute(map { $param->{$_}->[++$count{$_} - 1] }
+                  @{$query->{columns}});
+            }
+            else {
+                for my $param (@$params) {
+                    $affected = $sth->execute(map { $param->{$_} }
+                      @{$query->{columns}});
+                }
             }
         };
     }
@@ -2829,7 +2839,7 @@ C<insert> method use all of C<execute> method's options,
 and use the following new ones.
 
 =over 4
-
+b
 =item C<bulk_insert> EXPERIMENTAL
 
     bulk_insert => 1
