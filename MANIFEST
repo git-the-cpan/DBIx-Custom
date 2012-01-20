@@ -1,5 +1,4 @@
 Changes
-DBIx-Custom-0.2105/META.yml
 lib/DBIx/Custom.pm
 lib/DBIx/Custom/Guide.pod
 lib/DBIx/Custom/Mapper.pm
