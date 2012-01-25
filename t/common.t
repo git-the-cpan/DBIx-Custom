@@ -82,6 +82,12 @@ my $values_clause;
 my $assign_clause;
 my $reuse;
 my $affected;
+my $dbi1;
+my $dbi2;
+my $dbi3;
+my $dbi4;
+my $dbi5;
+my $pool;
 
 require MyDBI1;
 {
