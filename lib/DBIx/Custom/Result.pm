@@ -18,36 +18,6 @@ sub column {
   return $column;
 }
 
-sub filter {
-  my $self = shift;
-  
-  # Set
-  if (@_) {
-    
-    # Convert filter name to subroutine
-    my $filter = @_ == 1 ? $_[0] : [@_];
-    $filter = _array_to_hash($filter);
-    for my $column (keys %$filter) {
-      my $fname = $filter->{$column};
-      if  (exists $filter->{$column}
-        && defined $fname
-        && ref $fname ne 'CODE') 
-      {
-        croak qq{Filter "$fname" is not registered" } . _subname
-          unless exists $self->dbi->filters->{$fname};
-        $filter->{$column} = $self->dbi->filters->{$fname};
-      }
-    }
-    
-    # Merge
-    $self->{filter} = {%{$self->filter}, %$filter};
-    
-    return $self;
-  }
-  
-  return $self->{filter} ||= {};
-}
-
 sub fetch {
   my $self = shift;
   
@@ -244,6 +214,64 @@ sub fetch_one {
   $self->sth->finish;
   
   return $row;
+}
+
+sub filter {
+  my $self = shift;
+  
+  # Set
+  if (@_) {
+    
+    # Convert filter name to subroutine
+    my $filter = @_ == 1 ? $_[0] : [@_];
+    $filter = _array_to_hash($filter);
+    for my $column (keys %$filter) {
+      my $fname = $filter->{$column};
+      if  (exists $filter->{$column}
+        && defined $fname
+        && ref $fname ne 'CODE') 
+      {
+        croak qq{Filter "$fname" is not registered" } . _subname
+          unless exists $self->dbi->filters->{$fname};
+        $filter->{$column} = $self->dbi->filters->{$fname};
+      }
+    }
+    
+    # Merge
+    $self->{filter} = {%{$self->filter}, %$filter};
+    
+    return $self;
+  }
+  
+  return $self->{filter} ||= {};
+}
+
+sub flat {
+  my $self = shift;
+  
+  my @flat;
+  while (my $row = $self->fetch) {
+    push @flat, @$row;
+  }
+  return @flat;
+}
+
+sub kv {
+  my ($self, %opt) = @_;
+
+  my $key_name = $self->{sth}{NAME}[0];
+  my $kv = {};
+  while (my $row = $self->fetch_hash) {
+    my $key_value = delete $row->{$key_name};
+    next unless defined $key_value;
+    if ($opt{multi}) {
+      $kv->{$key_value} ||= [];
+      push @{$kv->{$key_value}}, $row;
+    }
+    else { $kv->{$key_value} = $row }
+  }
+  
+  return $kv;
 }
 
 sub header { shift->sth->{NAME} }
@@ -562,6 +590,81 @@ Fetch multiple rows and put them into array of array reference.
 Set filter for column.
 You can use subroutine or filter name as filter.
 This filter is executed after C<type_rule> filter.
+
+=head2 C<flat> EXPERIMENTAL
+
+  my $flat = $result->flat;
+
+All value is flatten and added to one array reference.
+  
+  my @flat = $dbi->select(['id', 'title'])->flat;
+
+If C<fetch_all> method return the following data
+
+  [
+    [1, 'Perl'],
+    [2, 'Ruby']
+  ]
+
+C<flat> method return the following data.
+
+  (1, 'Perl', 2, 'Ruby')
+
+You can create key-value pair easily.
+
+  my %titles = $dbi->select(['id', 'title'])->flat;
+
+=head2 C<kv> EXPERIMENTAL
+
+  my $key_value = $result->kv;
+  my $key_values = $result->kv(multi => 1);
+
+Get key-value pairs.
+
+  my $books = $dbi->select(['id', 'title', 'author'])->kv;
+
+If C<all> method return the following data:
+
+  [
+    {id => 1, title => 'Perl', author => 'Ken'},
+    {id => 2, title => 'Ruby', author => 'Taro'}
+  ]
+
+C<kv> method return the following data.
+
+  {
+    1 => {title => 'Perl', author => 'Ken'},
+    2 => {title => 'Ruby', author => 'Taro'}
+  }
+
+First column value become key.
+
+If value contains multipule data, you can push it to
+array refernce by C<multi> option.
+
+  my $books = $dbi->select(['author', 'title', 'price'])->kv(multi => 1);
+
+If C<all> method return the following data:
+
+  [
+    {author => 'Ken', title => 'Perl', price => 1000},
+    {author => 'Ken', title => 'Good', price => 2000},
+    {author => 'Taro', title => 'Ruby', price => 3000}
+    {author => 'Taro', title => 'Sky', price => 4000}
+  ]
+
+C<kv> method return the following data.
+
+  {
+    Ken => [
+      {title => 'Perl', price => 1000},
+      {title => 'Good', price => 2000}
+    ],
+    Taro => [
+      {title => 'Ruby', price => 3000},
+      {title => 'Sky', price => 4000}
+    ]
+  }
 
 =head2 C<header>
 

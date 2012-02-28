@@ -1,25 +1,25 @@
---- #YAML:1.0
-name:               DBIx-Custom
-version:            0.2111
-abstract:           DBI extension to execute insert, update, delete, and select easily
+---
+abstract: 'DBI extension to execute insert, update, delete, and select easily'
 author:
-    - Yuki Kimoto <kimoto.yuki@gmail.com>
-license:            perl
-distribution_type:  module
-configure_requires:
-    ExtUtils::MakeMaker:  0
+  - 'Yuki Kimoto <kimoto.yuki@gmail.com>'
 build_requires:
-    ExtUtils::MakeMaker:  0
-requires:
-    DBD::SQLite:     1.25
-    DBI:             1.605
-    Object::Simple:  3.0621
-    Test::More:      0
-no_index:
-    directory:
-        - t
-        - inc
-generated_by:       ExtUtils::MakeMaker version 6.56
+  ExtUtils::MakeMaker: 0
+configure_requires:
+  ExtUtils::MakeMaker: 0
+dynamic_config: 1
+generated_by: 'ExtUtils::MakeMaker version 6.62, CPAN::Meta::Converter version 2.112150'
+license: perl
 meta-spec:
-    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
-    version:  1.4
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: DBIx-Custom
+no_index:
+  directory:
+    - t
+    - inc
+requires:
+  DBD::SQLite: 1.25
+  DBI: 1.605
+  Object::Simple: 3.0621
+  Test::More: 0
+version: 0.22
