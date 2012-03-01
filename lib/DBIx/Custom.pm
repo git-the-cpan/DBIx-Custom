@@ -2,7 +2,7 @@ use 5.008007;
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.22';
+our $VERSION = '0.23';
 
 use Carp 'croak';
 use DBI;
@@ -3335,7 +3335,8 @@ Table name.
   where => 'title is null'
   #  -> where title is null
 
-Where clause. See L<DBIx::Custom::Where>.
+Where clause.
+See also L<DBIx::Custom::Where> to know how to create where clause.
   
 =back
 
@@ -3615,6 +3616,7 @@ You can use this in insert statement.
   );
 
 Create a new L<DBIx::Custom::Where> object.
+See L<DBIx::Custom::Where> to know how to create where clause.
 
 =head1 ENVIRONMENTAL VARIABLES
 

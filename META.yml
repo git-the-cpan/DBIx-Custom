@@ -22,4 +22,4 @@ requires:
   DBI: 1.605
   Object::Simple: 3.0621
   Test::More: 0
-version: 0.22
+version: 0.23
