@@ -16,6 +16,37 @@ plan 'no_plan';
 $SIG{__WARN__} = sub { warn $_[0] unless $_[0] =~ /DEPRECATED/};
 sub test { print "# $_[0]\n" }
 
+# Dot to under score
+sub u($) {
+  my $value = shift;
+  $value =~ s/\./_/g;
+  return $value;
+}
+
+sub u2($) {
+  my $value = shift;
+  $value =~ s/\./__/g;
+  return $value;
+}
+
+sub hy($) {
+  my $value = shift;
+  $value =~ s/\./-/g;
+  return $value;
+}
+
+sub colon2 {
+  my $value = shift;
+  $value =~ s/\./::/g;
+  return $value;
+}
+
+sub table_only {
+  my $value = shift;
+  $value =~ s/^.+\.//;
+  return $value;
+}
+
 # Constant
 my $table1 = $dbi->table1;
 my $table2 = $dbi->table2;
@@ -39,8 +70,7 @@ my $create_table2 = $dbi->create_table2;
 my $create_table2_2 = $dbi->create_table2_2;
 my $create_table3 = $dbi->create_table3;
 my $create_table_reserved = $dbi->create_table_reserved;
-my $q = substr($dbi->quote, 0, 1);
-my $p = substr($dbi->quote, 1, 1) || $q;
+my ($q, $p) = $dbi->_qp;
 my $date_typename = $dbi->date_typename;
 my $datetime_typename = $dbi->datetime_typename;
 my $date_datatype = $dbi->date_datatype;
@@ -175,7 +205,69 @@ require MyDBI1;
   }
 
   sub list { shift->select; }
+
+
+  package MyModel2::main::table1;
+
+  use strict;
+  use warnings;
+
+  use base 'MyModel2::Base1';
+
+  sub insert {
+    my ($self, $param) = @_;
+    
+    return $self->SUPER::insert($param);
+  }
+
+  sub list { shift->select; }
+
+  package MyModel2::main::table2;
+
+  use strict;
+  use warnings;
+
+  use base 'MyModel2::Base1';
+
+  sub insert {
+    my ($self, $param) = @_;
+    
+    return $self->SUPER::insert($param);
+  }
+
+  sub list { shift->select; }
+
+  package MyModel2::dbix_custom::table1;
+
+  use strict;
+  use warnings;
+
+  use base 'MyModel2::Base1';
+
+  sub insert {
+    my ($self, $param) = @_;
+    
+    return $self->SUPER::insert($param);
+  }
+
+  sub list { shift->select; }
+
+  package MyModel2::dbix_custom::table2;
+
+  use strict;
+  use warnings;
+
+  use base 'MyModel2::Base1';
+
+  sub insert {
+    my ($self, $param) = @_;
+    
+    return $self->SUPER::insert($param);
+  }
+
+  sub list { shift->select; }
 }
+
 {
    package MyDBI5;
 
@@ -1320,18 +1412,19 @@ $dbi->execute($create_table2);
 $dbi->insert({$key1 => 1, $key3 => 5}, table => $table2);
 $rows = $dbi->select(
   table => [$table1, $table2],
-  column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
+  column => "$table1.$key1 as " . u("${table1}_$key1")
+    . ", $table2.$key1 as " . u("${table2}_$key1") . ", $key2, $key3",
   where   => {"$table1.$key2" => 2},
   relation  => {"$table1.$key1" => "$table2.$key1"}
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}], "relation : exists where");
+is_deeply($rows, [{u"${table1}_$key1" => 1, u"${table2}_$key1" => 1, $key2 => 2, $key3 => 5}], "relation : exists where");
 
 $rows = $dbi->select(
   table => [$table1, $table2],
-  column => ["$table1.$key1 as ${table1}_$key1", "${table2}.$key1 as ${table2}_$key1", $key2, $key3],
+  column => ["$table1.$key1 as " . u("${table1}_$key1") . ", ${table2}.$key1 as " . u("${table2}_$key1"), $key2, $key3],
   relation  => {"$table1.$key1" => "$table2.$key1"}
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}], "relation : no exists where");
+is_deeply($rows, [{u"${table1}_$key1" => 1, u"${table2}_$key1" => 1, $key2 => 2, $key3 => 5}], "relation : no exists where");
 
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table ${q}table$p") };
@@ -2480,7 +2573,7 @@ $result = $model->select(
   where => {"$table1.$key1" => 1}
 );
 is_deeply($result->one,
-        {$key1 => 1, $key2 => 2, "${table2}__$key1" => 1, "${table2}__$key3" => 3});
+        {$key1 => 1, $key2 => 2, u2"${table2}__$key1" => 1, u2"${table2}__$key3" => 3});
 
 test 'values_clause';
 $dbi = DBIx::Custom->connect;
@@ -2591,23 +2684,23 @@ $dbi->insert({$key1 => 1, $key3 => 4}, table => $table2);
 $dbi->insert({$key1 => 2, $key3 => 5}, table => $table2);
 $rows = $dbi->select(
   table => $table1,
-  column => "$table1.$key1 as ${table1}_$key1, $key2, $key3",
+  column => "$table1.$key1 as " . u("${table1}_$key1") . ", $key2, $key3",
   where   => {"$table1.$key2" => 3},
   join  => ["inner join (select * from $table2 where {= $table2.$key3})" . 
-            " $table2 on $table1.$key1 = $table2.$key1"],
+            " $q$table2$p on $table1.$key1 = $q$table2$p.$key1"],
   param => {"$table2.$key3" => 5}
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 2, $key2 => 3, $key3 => 5}]);
+is_deeply($rows, [{u"${table1}_$key1" => 2, $key2 => 3, $key3 => 5}]);
 
 $rows = $dbi->select(
   table => $table1,
-  column => "$table1.$key1 as ${table1}_$key1, $key2, $key3",
+  column => "$table1.$key1 as " . u("${table1}_$key1") . ", $key2, $key3",
   where   => {"$table1.$key2" => 3},
   join  => "inner join (select * from $table2 where {= $table2.$key3})" . 
-           " $table2 on $table1.$key1 = $table2.$key1",
+           " $q$table2$p on $table1.$key1 = $q$table2$p.$key1",
   param => {"$table2.$key3" => 5}
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 2, $key2 => 3, $key3 => 5}]);
+is_deeply($rows, [{u"${table1}_$key1" => 2, $key2 => 3, $key3 => 5}]);
 
 test 'select() string where';
 $dbi = DBIx::Custom->connect;
@@ -3034,7 +3127,7 @@ $result = $model->select(
   where => {"$table1.$key1" => 1}
 );
 is_deeply($result->one,
-        {$key1 => 1, $key2 => 2, "${table2}__$key1" => 1, "${table2}__$key3" => 3});
+        {$key1 => 1, $key2 => 2, u2"${table2}__$key1" => 1, u2"${table2}__$key3" => 3});
 is_deeply($model2->select->one, {$key1 => 1, $key3 => 3});
 
 $dbi->separator('-');
@@ -3047,7 +3140,7 @@ $result = $model->select(
   where => {"$table1.$key1" => 1}
 );
 is_deeply($result->one,
-  {$key1 => 1, $key2 => 2, "$table2-$key1" => 1, "$table2-$key3" => 3});
+  {$key1 => 1, $key2 => 2, hy"$table2-$key1" => 1, hy"$table2-$key3" => 3});
 is_deeply($model2->select->one, {$key1 => 1, $key3 => 3});
 
 
@@ -3869,32 +3962,32 @@ $dbi->execute("insert into $table2 ($key1, $key3) values (1, 4)");
 $model = $dbi->model($table1);
 $result = $model->select(
   column => [
-    $model->column($table2, {alias => $table2_alias})
+    $model->column($table2, {alias => u$table2_alias})
   ],
-  where => {"$table2_alias.$key3" => 4}
+  where => {u($table2_alias) . ".$key3" => 4}
 );
 is_deeply($result->one, 
-        {"$table2_alias.$key1" => 1, "$table2_alias.$key3" => 4});
+        {u($table2_alias) . ".$key1" => 1, u($table2_alias) . ".$key3" => 4});
 
 $dbi->separator('__');
 $result = $model->select(
   column => [
-    $model->column($table2, {alias => $table2_alias})
+    $model->column($table2, {alias => u$table2_alias})
   ],
-  where => {"$table2_alias.$key3" => 4}
+  where => {u($table2_alias) . ".$key3" => 4}
 );
 is_deeply($result->one, 
-  {"${table2_alias}__$key1" => 1, "${table2_alias}__$key3" => 4});
+  {u(${table2_alias}) . "__$key1" => 1, u(${table2_alias}) . "__$key3" => 4});
 
 $dbi->separator('-');
 $result = $model->select(
   column => [
-      $model->column($table2, {alias => $table2_alias})
+    $model->column($table2, {alias => u$table2_alias})
   ],
-  where => {"$table2_alias.$key3" => 4}
+  where => {u($table2_alias) . ".$key3" => 4}
 );
 is_deeply($result->one, 
-  {"$table2_alias-$key1" => 1, "$table2_alias-$key3" => 4});
+  {u(${table2_alias}) . "-$key1" => 1, u(${table2_alias}) . "-$key3" => 4});
 
 test 'create_model';
 $dbi = DBIx::Custom->connect;
@@ -4130,10 +4223,10 @@ $dbi->each_column(sub {
 $infos = [sort { $a->[0] cmp $b->[0] || $a->[1] cmp $b->[1] } @$infos];
 is_deeply($infos, 
   [
-    [$table1, $key1, $key1],
-    [$table1, $key2, $key2],
-    [$table2, $key1, $key1],
-    [$table2, $key3, $key3]
+    [table_only($table1), $key1, $key1],
+    [table_only($table1), $key2, $key2],
+    [table_only($table2), $key1, $key1],
+    [table_only($table2), $key3, $key3]
   ]
   
 );
@@ -4157,8 +4250,8 @@ $dbi->each_table(sub {
 $infos = [sort { $a->[0] cmp $b->[0] || $a->[1] cmp $b->[1] } @$infos];
 is_deeply($infos, 
   [
-    [$table1, $table1],
-    [$table2, $table2],
+    [table_only($table1), table_only($table1)],
+    [table_only($table2), table_only($table2)],
   ]
 );
 
@@ -4181,9 +4274,9 @@ $dbi->each_table(sub {
 $infos = [sort { $a->[0] cmp $b->[0] || $a->[1] cmp $b->[1] } @$infos];
 is_deeply($infos, 
   [
-    [$table1, $table1],
-    [$table2, $table2],
-    [$table3, $table3],
+    [table_only($table1), table_only($table1)],
+    [table_only($table2), table_only($table2)],
+    [table_only($table3), table_only($table3)],
   ]
 );
 
@@ -4652,11 +4745,11 @@ $dbi->execute("create table $table3 ($key3 int, $key4 int)");
 $dbi->insert({$key3 => 5, $key4 => 4}, table => $table3);
 $rows = $dbi->select(
   table => $table1,
-  column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
+  column => "$table1.$key1 as " . u("${table1}_$key1") . ", $table2.$key1 as " . u("${table2}_$key1") . ", $key2, $key3",
   where   => {"$table1.$key2" => 2},
   join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1"]
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
+is_deeply($rows, [{u"${table1}_$key1" => 1, u"${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
 
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
@@ -4671,14 +4764,14 @@ $dbi->execute("create table $table3 ($key3 int, $key4 int)");
 $dbi->insert({$key3 => 5, $key4 => 4}, table => $table3);
 $rows = $dbi->select(
   table => $table1,
-  column => "$table1.$key1 as ${table1}_$key1, $table2.$key1 as ${table2}_$key1, $key2, $key3",
+  column => "$table1.$key1 as " . u("${table1}_$key1") . ", $table2.$key1 as " . u("${table2}_$key1") . ", $key2, $key3",
   where   => {"$table1.$key2" => 2},
   join  => {
     clause => "left outer join $table2 on $table1.$key1 = $table2.$key1",
     table => [$table1, $table2]
   }
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
+is_deeply($rows, [{u"${table1}_$key1" => 1, u"${table2}_$key1" => 1, $key2 => 2, $key3 => 5}]);
 
 $rows = $dbi->select(
   table => $table1,
@@ -4696,22 +4789,22 @@ $rows = $dbi->select(
 is_deeply($rows, [{$key1 => 1, $key2 => 2}]);
 
 $rows = $dbi->select(
-  column => "$table3.$key4 as ${table3}__$key4",
+  column => "$table3.$key4 as " . u2("${table3}__$key4"),
   table => $table1,
   where   => {"$table1.$key1" => 1},
   join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
             "left outer join $table3 on $table2.$key3 = $table3.$key3"]
 )->all;
-is_deeply($rows, [{"${table3}__$key4" => 4}]);
+is_deeply($rows, [{u2"${table3}__$key4" => 4}]);
 
 $rows = $dbi->select(
-  column => "$table1.$key1 as ${table1}__$key1",
+  column => "$table1.$key1 as " . u2("${table1}__$key1"),
   table => $table1,
   where   => {"$table3.$key4" => 4},
   join  => ["left outer join $table2 on $table1.$key1 = $table2.$key1",
             "left outer join $table3 on $table2.$key3 = $table3.$key3"]
 )->all;
-is_deeply($rows, [{"${table1}__$key1" => 1}]);
+is_deeply($rows, [{u2"${table1}__$key1" => 1}]);
 
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };
@@ -4722,11 +4815,11 @@ $dbi->execute($create_table2);
 $dbi->insert({$key1 => 1, $key3 => 5}, table => $table2);
 $rows = $dbi->select(
   table => $table1,
-  column => "${q}$table1$p.${q}$key1$p as ${q}${table1}_$key1$p, ${q}$table2$p.${q}$key1$p as ${q}${table2}_$key1$p, ${q}$key2$p, ${q}$key3$p",
+  column => $dbi->_tq($table1) . ".${q}$key1$p as ${q}" . u("${table1}_$key1") . "$p, " . $dbi->_tq($table2) . ".${q}$key1$p as ${q}" . u("${table2}_$key1") . "$p, ${q}$key2$p, ${q}$key3$p",
   where   => {"$table1.$key2" => 2},
-  join  => ["left outer join ${q}$table2$p on ${q}$table1$p.${q}$key1$p = ${q}$table2$p.${q}$key1$p"],
+  join  => ["left outer join " . $dbi->_tq($table2) . " on " . $dbi->_tq($table1) . ".${q}$key1$p = " . $dbi->_tq($table2) . ".${q}$key1$p"],
 )->all;
-is_deeply($rows, [{"${table1}_$key1" => 1, "${table2}_$key1" => 1, $key2 => 2, $key3 => 5}],
+is_deeply($rows, [{u"${table1}_$key1" => 1, u"${table2}_$key1" => 1, $key2 => 2, $key3 => 5}],
   'quote');
 
 
@@ -4737,19 +4830,20 @@ $dbi->insert({$key1 => 1, $key2 => 2}, table => $table1);
 $sql = <<"EOS";
 left outer join (
 select * from $table1 t1
-where t1.$key2 = (
-  select max(t2.$key2) from $table1 t2
-  where t1.$key1 = t2.$key1
-)
+  where t1.$key2 = (
+    select max(t2.$key2) from $table1 t2
+    where t1.$key1 = t2.$key1
+  )
 ) $table3 on $table1.$key1 = $table3.$key1
 EOS
+$sql =~ s/\Q.table3/_table3/g;
 $join = [$sql];
 $rows = $dbi->select(
   table => $table1,
-  column => "$table3.$key1 as ${table3}__$key1",
+  column => u($table3) . ".$key1 as " . u2("${table3}__$key1"),
   join  => $join
 )->all;
-is_deeply($rows, [{"${table3}__$key1" => 1}]);
+is_deeply($rows, [{u2"${table3}__$key1" => 1}]);
 
 $dbi = DBIx::Custom->connect;
 eval { $dbi->execute("drop table $table1") };

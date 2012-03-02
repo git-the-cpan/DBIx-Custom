@@ -2,7 +2,7 @@ use 5.008007;
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.23';
+our $VERSION = '0.24';
 
 use Carp 'croak';
 use DBI;
@@ -20,7 +20,7 @@ use Encode qw/encode encode_utf8 decode_utf8/;
 use Scalar::Util qw/weaken/;
 
 
-has [qw/connector dsn password quote user exclude_table user_table_info
+has [qw/connector dsn default_schema password quote user exclude_table user_table_info
      user_column_info safety_character/],
   async_conf => sub { {} },
   cache => 0,
@@ -124,7 +124,7 @@ sub assign_clause {
   my ($self, $param, $opts) = @_;
   
   my $wrap = $opts->{wrap} || {};
-  my ($q, $p) = split //, $self->q('');
+  my ($q, $p) = $self->_qp;
   
   # Assign clause (performance is important)
   join(
@@ -152,11 +152,15 @@ sub column {
   # Separator
   my $separator = $self->separator;
   
+  # . is replaced
+  my $t = $table;
+  $t =~ s/\./$separator/g;
+  
   # Column clause
   my @column;
   $columns ||= [];
-  push @column, $self->q($table) . "." . $self->q($_) .
-    " as " . $self->q("${table}${separator}$_")
+  push @column, $self->_tq($table) . "." . $self->q($_) .
+    " as " . $self->q("${t}${separator}$_")
     for @$columns;
   
   return join (', ', @column);
@@ -240,7 +244,7 @@ sub delete {
   # Delete statement
   my $sql = "delete ";
   $sql .= "$opt{prefix} " if defined $opt{prefix};
-  $sql .= "from " . $self->q($opt{table}) . " $w->{clause} ";
+  $sql .= "from " . $self->_tq($opt{table}) . " $w->{clause} ";
   
   # Execute query
   $opt{statement} = 'delete';
@@ -287,7 +291,7 @@ sub create_model {
 
 sub each_column {
   my ($self, $cb, %options) = @_;
-
+  
   my $user_column_info = $self->user_column_info;
   
   if ($user_column_info) {
@@ -296,21 +300,25 @@ sub each_column {
   else {
     my $re = $self->exclude_table || $options{exclude_table};
     # Tables
-    my %tables;
-    $self->each_table(sub { $tables{$_[1]}++ });
+    my $tables = {};
+    $self->each_table(sub {
+      my ($dbi, $table, $table_info) = @_;
+      my $schema = $table_info->{TABLE_SCHEM};
+      $tables->{$schema}{$table}++;
+    });
 
     # Iterate all tables
-    my @tables = sort keys %tables;
-    for (my $i = 0; $i < @tables; $i++) {
-      my $table = $tables[$i];
-      
-      # Iterate all columns
-      my $sth_columns;
-      eval {$sth_columns = $self->dbh->column_info(undef, undef, $table, '%')};
-      next if $@;
-      while (my $column_info = $sth_columns->fetchrow_hashref) {
-        my $column = $column_info->{COLUMN_NAME};
-        $self->$cb($table, $column, $column_info);
+    for my $schema (sort keys %$tables) {
+      for my $table (sort keys %{$tables->{$schema}}) {
+        
+        # Iterate all columns
+        my $sth_columns;
+        eval {$sth_columns = $self->dbh->column_info(undef, $schema, $table, '%')};
+        next if $@;
+        while (my $column_info = $sth_columns->fetchrow_hashref) {
+          my $column = $column_info->{COLUMN_NAME};
+          $self->$cb($table, $column, $column_info);
+        }
       }
     }
   }
@@ -734,7 +742,7 @@ sub insert {
   # Insert statement
   my $sql = "insert ";
   $sql .= "$opt{prefix} " if defined $opt{prefix};
-  $sql .= "into " . $self->q($opt{table}) . " ";
+  $sql .= "into " . $self->_tq($opt{table}) . " ";
   if ($opt{bulk_insert}) {
     $sql .= $self->_multi_values_clause($params, {wrap => $opt{wrap}}) . " ";
     my $new_param = {};
@@ -791,12 +799,27 @@ sub include_model {
     $path =~ s/\.pm$//;
     opendir my $dh, $path
       or croak qq{Can't open directory "$path": $! } . _subname
-    $model_infos = [];
-    while (my $module = readdir $dh) {
-      push @$model_infos, $module
-        if $module =~ s/\.pm$//;
+    my @modules;
+    while (my $file = readdir $dh) {
+      my $file_abs = "$path/$file";
+      if (-d $file_abs) {
+        next if $file eq '.' || $file eq '..';
+        opendir my $fq_dh, $file_abs
+          or croak qq{Can't open directory "$file_abs": $! } . _subname;
+        while (my $fq_file = readdir $fq_dh) {
+          my $fq_file_abs = "$file_abs/$fq_file";
+          push @modules, "${file}::$fq_file" if -f $fq_file_abs;
+        }
+        close $fq_dh;
+      }
+      elsif(-f $file_abs) { push @modules, $file }
     }
     close $dh;
+    
+    $model_infos = [];
+    for my $module (@modules) {
+      if ($module =~ s/\.pm$//) { push @$model_infos, $module }
+    }
   }
   
   # Include models
@@ -814,7 +837,14 @@ sub include_model {
       $model_name  ||= $model_class;
       $model_table ||= $model_name;
     }
-    else { $model_class = $model_name = $model_table = $model_info }
+    else {
+      $model_class = $model_name = $model_table = $model_info;
+    }
+
+    $model_class =~ s/\./::/g;
+    $model_name =~ s/::/./;
+    $model_table =~ s/::/./;
+
     my $mclass = "${name_space}::$model_class";
     croak qq{"$mclass" is invalid class name } . _subname
       if $mclass =~ /[^\w:]/;
@@ -886,7 +916,7 @@ sub mycolumn {
   # Create column clause
   my @column;
   $columns ||= [];
-  push @column, $self->q($table) . "." . $self->q($_) . " as " . $self->q($_)
+  push @column, $self->_tq($table) . "." . $self->q($_) . " as " . $self->q($_)
     for @$columns;
   
   return join (', ', @column);
@@ -932,13 +962,13 @@ sub order {
   return DBIx::Custom::Order->new(dbi => $self, @_);
 }
 
-sub q {
-  my ($self, $value, $quotemeta) = @_;
+sub q { shift->_tq($_[0], $_[1], whole => 1) }
+
+sub _tq {
+  my ($self, $value, $quotemeta, %opt) = @_;
   
   my $quote = $self->{reserved_word_quote}
     || $self->{quote} || $self->quote || '';
-  return "$quote$value$quote"
-    if !$quotemeta && ($quote eq '`' || $quote eq '"');
   
   my $q = substr($quote, 0, 1) || '';
   my $p;
@@ -952,7 +982,34 @@ sub q {
     $p = quotemeta($p);
   }
   
-  return "$q$value$p";
+  if ($opt{whole}) { return "$q$value$p" }
+  else {
+    my @values = split /\./, $value;
+    push @values, '' unless @values;
+    for my $v (@values) { $v = "$q$v$p" }
+    return join '.', @values;
+  }
+}
+
+sub _qp {
+  my ($self, %opt) = @_;
+
+  my $quote = $self->{reserved_word_quote}
+    || $self->{quote} || $self->quote || '';
+  
+  my $q = substr($quote, 0, 1) || '';
+  my $p;
+  if (defined $quote && length $quote > 1) {
+    $p = substr($quote, 1, 1);
+  }
+  else { $p = $q }
+  
+  if ($opt{quotemeta}) {
+    $q = quotemeta($q);
+    $p = quotemeta($p);
+  }
+  
+  return ($q, $p);
 }
 
 sub register_filter {
@@ -1029,11 +1086,11 @@ sub select {
   if ($opt{relation}) {
     my $found = {};
     for my $table (@$tables) {
-      $sql .= $self->q($table) . ', ' unless $found->{$table};
+      $sql .= $self->_tq($table) . ', ' unless $found->{$table};
       $found->{$table} = 1;
     }
   }
-  else { $sql .= $self->q($tables->[-1] || '') . ' ' }
+  else { $sql .= $self->_tq($tables->[-1] || '') . ' ' }
   $sql =~ s/, $/ /;
 
   # Add tables in parameter
@@ -1062,14 +1119,23 @@ sub select {
 }
 
 sub setup_model {
-  my $self = shift;
+  my ($self, %opt) = @_;
   
   # Setup model
   $self->each_column(
     sub {
       my ($self, $table, $column, $column_info) = @_;
+      my $schema = $column_info->{TABLE_SCHEM};
+      
+      my $default_schema = $self->default_schema;
+      
       if (my $model = $self->models->{$table}) {
-        push @{$model->columns}, $column;
+        if (!defined $default_schema || $default_schema eq $schema) {
+          push @{$model->columns}, $column;
+        }
+      }
+      if (my $fullqualified_model = $self->models->{"$schema.$table"}) {
+        push @{$fullqualified_model->columns}, $column;
       }
     }
   );
@@ -1154,9 +1220,16 @@ sub type_rule {
             
             $filter = $self->filters->{$fname};
           }
-
-          $self->{"_$into"}{key}{$table}{$column} = $filter;
-          $self->{"_$into"}{dot}{"$table.$column"} = $filter;
+          
+          my $schema = $column_info->{TABLE_SCHEM};
+          my $default_schema = $self->default_schema;
+          if (!defined $default_schema || $default_schema eq $schema) {
+            $self->{"_$into"}{key}{$table}{$column} = $filter;
+            $self->{"_$into"}{dot}{"$table.$column"} = $filter;
+          }
+          
+          $self->{"_$into"}{key}{"$schema.$table"}{$column} = $filter;
+          $self->{"_$into"}{dot}{"$schema.$table.$column"} = $filter;
         }
       });
     }
@@ -1231,7 +1304,7 @@ sub update {
   # Update statement
   my $sql = "update ";
   $sql .= "$opt{prefix} " if defined $opt{prefix};
-  $sql .= $self->q($opt{table}) . " set $assign_clause $w->{clause} ";
+  $sql .= $self->_tq($opt{table}) . " set $assign_clause $w->{clause} ";
   
   # Execute query
   $opt{statement} = 'update';
@@ -1277,7 +1350,7 @@ sub values_clause {
   my $wrap = $opts->{wrap} || {};
   
   # Create insert parameter tag
-  my ($q, $p) = split //, $self->q('');
+  my ($q, $p) = $self->_qp;
   
   # values clause(performance is important)
   '(' .
@@ -1303,7 +1376,7 @@ sub _multi_values_clause {
   my $wrap = $opts->{wrap} || {};
   
   # Create insert parameter tag
-  my ($q, $p) = split //, $self->q('');
+  my ($q, $p) = $self->_qp;
   
   # Multi values clause
   my $clause = '(' . join(', ', map { "$q$_$p" } sort keys %{$params->[0]}) . ') values ';
@@ -1605,7 +1678,7 @@ sub _push_join {
       
       my @j_clauses = reverse split /\s(and|on)\s/, $j_clause;
       my $c = $self->{safety_character};
-      my $join_re = qr/([$c]+)\.[$c]+[^$c].*?([$c]+)\.[$c]+/sm;
+      my $join_re = qr/((?:[$c]+?\.[$c]+?)|(?:[$c]+?))\.[$c]+[^$c].*?((?:[$c]+?\.[$c]+?)|(?:[$c]+?))\.[$c]+/sm;
       for my $clause (@j_clauses) {
         if ($clause =~ $join_re) {
           $table1 = $1;
@@ -1661,12 +1734,14 @@ sub _search_tables {
   
   # Search tables
   my $tables = [];
-  my $safety_character = $self->{safety_character};
-  my $q = $self->_quote;
-  my $quoted_safety_character_re = $self->q("?([$safety_character]+)", 1);
-  my $table_re = $q ? qr/(?:^|[^$safety_character])${quoted_safety_character_re}?\./
-    : qr/(?:^|[^$safety_character])([$safety_character]+)\./;
-  while ($source =~ /$table_re/g) { push @$tables, $1 }
+  my ($q, $p) = $self->_qp(quotemeta => 1);
+  $source =~ s/$q//g;
+  $source =~ s/$p//g;
+  my $c = $self->safety_character;
+  
+  while ($source =~ /((?:[$c]+?\.[$c]+?)|(?:[$c]+?))\.[$c]+/g) {
+    push @$tables, $1;
+  }
   return $tables;
 }
 
@@ -1685,13 +1760,13 @@ sub _where_clause_and_param {
       $column_join .= $column;
       my $table;
       my $c;
-      if ($column =~ /(?:(.*?)\.)?(.*)/) {
+      if ($column =~ /(?:(.*)\.)?(.*)/) {
         $table = $1;
         $c = $2;
       }
       
       my $table_quote;
-      $table_quote = $self->q($table) if defined $table;
+      $table_quote = $self->_tq($table) if defined $table;
       my $column_quote = $self->q($c);
       $column_quote = $table_quote . '.' . $column_quote
         if defined $table_quote;
@@ -2049,8 +2124,8 @@ sub _push_relation {
   if (keys %{$relation || {}}) {
     $$sql .= $need_where ? 'where ' : 'and ';
     for my $rcolumn (keys %$relation) {
-      my $table1 = (split (/\./, $rcolumn))[0];
-      my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
+      my ($table1) = $rcolumn =~ /^(.+)\.(.+)$/;
+      my ($table2) = $relation->{$rcolumn} =~ /^(.+)\.(.+)$/;
       push @$tables, ($table1, $table2);
       $$sql .= "$rcolumn = " . $relation->{$rcolumn} .  'and ';
     }
@@ -2064,8 +2139,8 @@ sub _add_relation_table {
   
   if (keys %{$relation || {}}) {
     for my $rcolumn (keys %$relation) {
-      my $table1 = (split (/\./, $rcolumn))[0];
-      my $table2 = (split (/\./, $relation->{$rcolumn}))[0];
+      my ($table1) = $rcolumn =~ /^(.+)\.(.+)$/;
+      my ($table2) = $relation->{$rcolumn} =~ /^(.+)\.(.+)$/;
       my $table1_exists;
       my $table2_exists;
       for my $table (@$tables) {
@@ -2243,6 +2318,16 @@ L<DBIx::Connector> is automatically set to C<connector>
 
 Note that L<DBIx::Connector> must be installed.
 
+=head2 C<default_schema> EXPERIMETNAL
+
+  my $default_schema = $self->default_schema;
+  $dbi = $self->default_schema('public');
+
+schema name. if database has multiple schema,
+type_rule->{into} filter don't work well.
+
+If you set C<default_schema>, type_rule->{into} filter work well.
+
 =head2 C<dsn>
 
   my $dsn = $dbi->dsn;
@@ -2359,8 +2444,8 @@ Result class, default to L<DBIx::Custom::Result>.
   my $safety_character = $dbi->safety_character;
   $dbi = $dbi->safety_character($character);
 
-Regex of safety character for table and column name, default to '\w'.
-Note that you don't have to specify like '[\w]'.
+Regex of safety character for table and column name, default to 'a-zA-Z_'.
+Note that you don't have to specify like '[a-zA-Z_]'.
 
 =head2 C<separator>
 
@@ -3067,6 +3152,14 @@ You can get model object by C<model>.
 
   my $book_model = $dbi->model('book');
   my $company_model = $dbi->model('company');
+
+You can include full-qualified table name like C<main.book>
+
+  lib / MyModel.pm
+      / MyModel / main / book.pm
+                       / company.pm
+
+  my $main_book = $self->model('main.book');
 
 See L<DBIx::Custom::Model> to know model features.
 
