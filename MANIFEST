@@ -113,7 +113,5 @@ t/mysql.t
 t/mysql2.t
 t/sqlite-quote.t
 t/sqlite.t
-xt/boilerplate.t
-xt/pod.t
 META.yml                                 Module YAML meta-data (added by MakeMaker)
 META.json                                Module JSON meta-data (added by MakeMaker)
