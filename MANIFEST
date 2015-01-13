@@ -1,5 +1,6 @@
-a.txt
 Changes
+DBIx-Custom-0.31/META.json
+DBIx-Custom-0.31/META.yml
 lib/DBIx/Custom.pm
 lib/DBIx/Custom/Mapper.pm
 lib/DBIx/Custom/Model.pm
@@ -48,9 +49,9 @@ t/common/MyModel6/table3.pm
 t/common/MyModel7.pm
 t/common/MyModel7/table1.pm
 t/common/MyModel7/table2.pm
-t/common/MyModel8.pm
-t/common/MyModel8/table1.pm
-t/common/MyModel8/table2.pm
+t/common/MyModel8/MyModel1.pm
+t/common/MyModel8/MyModel1/table1.pm
+t/common/MyModel8/MyModel1/table2.pm
 t/common_fullqualified/MyDBI1.pm
 t/common_fullqualified/MyModel1/dbix_custom/table1.pm
 t/common_fullqualified/MyModel1/dbix_custom/table2.pm
@@ -80,11 +81,11 @@ t/common_fullqualified/MyModel7/dbix_custom/table1.pm
 t/common_fullqualified/MyModel7/dbix_custom/table2.pm
 t/common_fullqualified/MyModel7/main/table1.pm
 t/common_fullqualified/MyModel7/main/table2.pm
-t/common_fullqualified/MyModel8.pm
-t/common_fullqualified/MyModel8/dbix_custom/table1.pm
-t/common_fullqualified/MyModel8/dbix_custom/table2.pm
-t/common_fullqualified/MyModel8/main/table1.pm
-t/common_fullqualified/MyModel8/main/table2.pm
+t/common_fullqualified/MyModel8/MyModel1.pm
+t/common_fullqualified/MyModel8/MyModel1/dbix_custom/table1.pm
+t/common_fullqualified/MyModel8/MyModel1/dbix_custom/table2.pm
+t/common_fullqualified/MyModel8/MyModel1/main/table1.pm
+t/common_fullqualified/MyModel8/MyModel1/main/table2.pm
 t/common_uc/MyDBI1.pm
 t/common_uc/MyModel1/TABLE1.pm
 t/common_uc/MyModel1/TABLE2.pm
@@ -107,6 +108,7 @@ t/common_uc/MyModel8/TABLE1.pm
 t/common_uc/MyModel8/TABLE2.pm
 t/create_fullqualified_module.pl
 t/create_uppercase_module.pl
+t/mysql-async-opt-insert.t
 t/mysql-async-opt.t
 t/mysql-async.t
 t/mysql.t

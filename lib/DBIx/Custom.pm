@@ -2,7 +2,7 @@ use 5.008007;
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.30';
+our $VERSION = '0.31';
 
 use Carp 'croak';
 use DBI;
@@ -590,53 +590,76 @@ sub execute {
   for my $column (@cleanup, @{$opt{cleanup} || []}) {
     delete $_->{$column} for @$params;
   }
-  
-  # Not select statement
-  return $affected if !$sth->{NUM_OF_FIELDS} && $opt{statement} ne 'select';
 
-  # Filter(DEPRECATED!)
-  my $infilter = {};
-  if ($self->{filter}{on}) {
-    $infilter->{in}  = {};
-    $infilter->{end} = {};
-    push @$tables, $main_table if $main_table;
-    for my $table (@$tables) {
-      for my $way (qw/in end/) {
-        $infilter->{$way} = {%{$infilter->{$way}},
-          %{$self->{filter}{$way}{$table} || {}}};
+  # Affected of insert, update, or delete
+  if (!$sth->{NUM_OF_FIELDS} && $opt{statement} ne 'select') {
+    # Non-Blocking
+    if (my $cb = $opt{async}) {
+      require AnyEvent;
+      my $watcher;
+      weaken $self;
+      $watcher = AnyEvent->io(
+        fh => $self->async_conf->{fh}->($self),
+        poll => 'r',
+        cb   => sub {
+          $cb->($self, $affected);
+          undef $watcher;
+          undef $affected;
+          undef $cb;
+        },
+      );
+    }
+    # Blocking
+    else { return $affected }
+  }
+  # Reulst of select statement
+  else {
+    # Filter(DEPRECATED!)
+    my $infilter = {};
+    if ($self->{filter}{on}) {
+      $infilter->{in}  = {};
+      $infilter->{end} = {};
+      push @$tables, $main_table if $main_table;
+      for my $table (@$tables) {
+        for my $way (qw/in end/) {
+          $infilter->{$way} = {%{$infilter->{$way}},
+            %{$self->{filter}{$way}{$table} || {}}};
+        }
       }
     }
-  }
-  
-  # Result
-  my $result = $self->result_class->new(
-    sth => $sth,
-    dbi => $self,
-    default_filter => $self->{default_in_filter},
-    filter => $infilter->{in} || {},
-    end_filter => $infilter->{end} || {},
-    type_rule => {
-      from1 => $self->type_rule->{from1},
-      from2 => $self->type_rule->{from2}
-    },
-  );
-  
-  if (my $cb = $opt{async}) {
-    require AnyEvent;
-    my $watcher;
-    weaken $self;
-    $watcher = AnyEvent->io(
-      fh => $self->async_conf->{fh}->($self),
-      poll => 'r',
-      cb   => sub {
-        $cb->($self, $result);
-        undef $watcher;
-        undef $result;
-        undef $cb;
+    
+    # Result
+    my $result = $self->result_class->new(
+      sth => $sth,
+      dbi => $self,
+      default_filter => $self->{default_in_filter},
+      filter => $infilter->{in} || {},
+      end_filter => $infilter->{end} || {},
+      type_rule => {
+        from1 => $self->type_rule->{from1},
+        from2 => $self->type_rule->{from2}
       },
     );
+    
+    # Non-Blocking
+    if (my $cb = $opt{async}) {
+      require AnyEvent;
+      my $watcher;
+      weaken $self;
+      $watcher = AnyEvent->io(
+        fh => $self->async_conf->{fh}->($self),
+        poll => 'r',
+        cb   => sub {
+          $cb->($self, $result);
+          undef $watcher;
+          undef $result;
+          undef $cb;
+        },
+      );
+    }
+    # Blocking
+    else { return $result }
   }
-  else { $result }
 }
 
 sub get_table_info {
@@ -789,7 +812,7 @@ sub include_model {
   # Name space
   $name_space ||= '';
   
-  # Get Model infomations
+  # Get Model information
   unless ($model_infos) {
 
     # Load name space module
@@ -800,7 +823,9 @@ sub include_model {
       if $@;
     
     # Search model modules
-    my $path = $INC{"$name_space.pm"};
+    my $name_space_dir = $name_space;
+    $name_space_dir =~ s/::/\//g;
+    my $path = $INC{"$name_space_dir.pm"};
     $path =~ s/\.pm$//;
     opendir my $dh, $path
       or croak qq{Can't open directory "$path": $! } . _subname
@@ -907,7 +932,7 @@ sub model {
     return $self;
   }
   
-  # Check model existance
+  # Check model existence
   croak qq{Model "$name" is not included } . _subname
     unless $self->models->{$name};
   
@@ -1623,7 +1648,7 @@ sub _croak {
   
   # Not verbose
   else {
-    # Remove line and module infromation
+    # Remove line and module information
     my $at_pos = rindex($error, ' at ');
     $error = substr($error, 0, $at_pos);
     $error =~ s/\s+$//;
@@ -1855,7 +1880,7 @@ sub _apply_filter {
       next;
     }
     
-    # Filter infomation
+    # Filter information
     my $finfo = $cinfos[$i + 1] || {};
     croak "$usage (table: $table) " . _subname
       unless  ref $finfo eq 'HASH';
@@ -2312,7 +2337,7 @@ C<fh> is callback that return file handle to watch.
   $dbi = $dbi->connector($connector);
 
 Connection manager object. if C<connector> is set, you can get C<dbh>
-through connection manager. Conection manager object must have C<dbh> mehtod.
+through connection manager. Conection manager object must have C<dbh> method.
 
 This is L<DBIx::Connector> example. Please pass
 C<default_option> to L<DBIx::Connector> C<new> method.
@@ -2388,7 +2413,7 @@ Filters, registered by C<register_filter> method.
   my $last_sql = $dbi->last_sql;
   $dbi = $dbi->last_sql($last_sql);
 
-Get last successed SQL executed by C<execute> method.
+Get last succeeded SQL executed by C<execute> method.
 
 =head2 now
 
@@ -2418,7 +2443,7 @@ Models, included by C<include_model> method.
 
 =head2 mytable_symbol
 
-Symbol to sepecify own columns in select method column option, default to '__MY__'.
+Symbol to specify own columns in select method column option, default to '__MY__'.
 
   $dbi->table('book')->select({__MY__ => '*'});
 
@@ -2624,7 +2649,7 @@ This is C<mysql> async access example.
 
   my $column = $dbi->column(book => ['author', 'title']);
 
-Create column clause. The follwoing column clause is created.
+Create column clause. The following column clause is created.
 
   book.author as "book.author",
   book.title as "book.title"
@@ -2688,7 +2713,7 @@ database handle through C<connector> object.
 
 Execute delete statement.
 
-The following opitons are available.
+The following options are available.
 
 B<OPTIONS>
 
@@ -2711,7 +2736,7 @@ You can delete rows by C<id> and C<primary_key>.
     table => 'book',
   );
 
-The above is same as the followin one.
+The above is same as the following one.
 
   $dbi->delete(where => {id1 => 4, id2 => 5}, table => 'book');
 
@@ -2762,7 +2787,7 @@ Callback receive four arguments. C<DBIx::Custom object>, C<table name>,
 C<column name>, and C<column information>.
 
 If C<user_column_info> is set, C<each_column> method use C<user_column_info>
-infromation, you can improve the performance of C<each_column> in
+information, you can improve the performance of C<each_column> in
 the following way.
 
   my $column_infos = $dbi->get_column_info(exclude_table => qr/^system_/);
@@ -2779,13 +2804,13 @@ the following way.
     }
   );
 
-Iterate all table informationsfrom in database.
+Iterate all table information from in database.
 Argument is callback which is executed when one table is found.
 Callback receive three arguments, C<DBIx::Custom object>, C<table name>,
 C<table information>.
 
 If C<user_table_info> is set, C<each_table> method use C<user_table_info>
-infromation, you can improve the performance of C<each_table> in
+information, you can improve the performance of C<each_table> in
 the following way.
 
   my $table_infos = $dbi->get_table_info(exclude => qr/^system_/);
@@ -2806,7 +2831,7 @@ the following way.
 
 Execute SQL. SQL can contain column parameter such as :author and :title.
 You can append table name to column name such as :book.title and :book.author.
-Second argunet is data, embedded into column parameter.
+Second argument is data, embedded into column parameter.
 Return value is L<DBIx::Custom::Result> object when select statement is executed,
 or the count of affected rows when insert, update, delete statement is executed.
 
@@ -2827,7 +2852,7 @@ by C<name{operator}> syntax.
   # Replaced
   select * from where title = ? and author like ?;
 
-Note that colons in time format such as 12:13:15 is exeption,
+Note that colons in time format such as 12:13:15 is an exception,
 it is not parsed as named placeholder.
 If you want to use colon generally, you must escape it by C<\\>
 
@@ -2835,7 +2860,7 @@ If you want to use colon generally, you must escape it by C<\\>
 
 B<OPTIONS>
 
-The following opitons are available.
+The following options are available.
 
 =over 4
 
@@ -2879,7 +2904,7 @@ Specify database bind data type.
   bind_type => [image => DBI::SQL_BLOB]
   bind_type => [[qw/image audio/] => DBI::SQL_BLOB]
 
-This is used to bind parameter by C<bind_param> of statment handle.
+This is used to bind parameter by C<bind_param> of statement handle.
 
   $sth->bind_param($pos, $value, DBI::SQL_BLOB);
 
@@ -2902,7 +2927,7 @@ This is used to bind parameter by C<bind_param> of statment handle.
   ]
 
 Filter. You can set subroutine or filter name
-registered by by C<register_filter>.
+registered by C<register_filter>.
 This filter is executed before data is saved into database.
 and before type rule filter is executed.
 
@@ -2911,7 +2936,7 @@ and before type rule filter is executed.
   query => 1
 
 C<execute> method return hash reference which contain SQL and column
-infromation
+information
 
   my $sql = $query->{sql};
   my $columns = $query->{columns};
@@ -2990,7 +3015,7 @@ Turn C<into2> type rule off.
 
   my $column_infos = $dbi->get_column_info(exclude_table => qr/^system_/);
 
-get column infomation except for one which match C<exclude_table> pattern.
+get column information except for one which match C<exclude_table> pattern.
 
   [
     {table => 'book', column => 'title', info => {...}},
@@ -3001,7 +3026,7 @@ get column infomation except for one which match C<exclude_table> pattern.
 
   my $table_infos = $dbi->get_table_info(exclude => qr/^system_/);
 
-get table infomation except for one which match C<exclude> pattern.
+get table information except for one which match C<exclude> pattern.
 
   [
     {table => 'book', info => {...}},
@@ -3090,7 +3115,7 @@ You can insert a row by C<id> and C<primary_key>.
     table => 'book'
   );
 
-The above is same as the followin one.
+The above is same as the following one.
 
   $dbi->insert(
     {id1 => 4, id2 => 5, title => 'Perl', author => 'Ken'},
@@ -3222,7 +3247,7 @@ create by C<create_model> or C<include_model>
 
   my $column = $dbi->mycolumn(book => ['author', 'title']);
 
-Create column clause for myself. The follwoing column clause is created.
+Create column clause for myself. The following column clause is created.
 
   book.author as author,
   book.title as title
@@ -3347,7 +3372,7 @@ You can select rows by C<id> and C<primary_key>.
     table => 'book'
   );
 
-The above is same as the followin one.
+The above is same as the following one.
 
   $dbi->select(
     where => {id1 => 4, id2 => 5},
@@ -3366,11 +3391,11 @@ you can pass parameter by C<param> option.
   join  => ['inner join (select * from table2 where table2.key3 = :table2.key3)' . 
             ' as table2 on table1.key1 = table2.key1']
 
-=itme C<prefix>
+=item C<prefix>
 
   prefix => 'SQL_CALC_FOUND_ROWS'
 
-Prefix of column cluase
+Prefix of column clause
 
   select SQL_CALC_FOUND_ROWS title, author from book;
 
@@ -3381,8 +3406,8 @@ Prefix of column cluase
     'left outer join location on company.location_id = location.id'
   ]
       
-Join clause. If column cluase or where clause contain table name like "company.name",
-join clausees needed when SQL is created is used automatically.
+Join clause. If column clause or where clause contain table name like "company.name",
+join clauses needed when SQL is created is used automatically.
 
   $dbi->select(
     table => 'book',
@@ -3499,7 +3524,7 @@ type name as same as type name defined
 by create table, such as C<DATETIME> or C<DATE>.
 
 Note that type name and data type don't contain upper case.
-If these contain upper case charactor, you convert it to lower case.
+If these contain upper case character, you convert it to lower case.
 
 C<into2> is executed after C<into1>.
 
@@ -3573,7 +3598,7 @@ You can update rows by C<id> and C<primary_key>.
     table => 'book'
   );
 
-The above is same as the followin one.
+The above is same as the following one.
 
   $dbi->update(
     {title => 'Perl', author => 'Ken'}
