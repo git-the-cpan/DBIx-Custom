@@ -1,6 +1,4 @@
 Changes
-DBIx-Custom-0.31/META.json
-DBIx-Custom-0.31/META.yml
 lib/DBIx/Custom.pm
 lib/DBIx/Custom/Mapper.pm
 lib/DBIx/Custom/Model.pm
@@ -108,7 +106,6 @@ t/common_uc/MyModel8/TABLE1.pm
 t/common_uc/MyModel8/TABLE2.pm
 t/create_fullqualified_module.pl
 t/create_uppercase_module.pl
-t/mysql-async-opt-insert.t
 t/mysql-async-opt.t
 t/mysql-async.t
 t/mysql.t
