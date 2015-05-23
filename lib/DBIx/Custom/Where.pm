@@ -9,8 +9,10 @@ use overload '""' => sub { shift->to_string }, fallback => 1;
 # Carp trust relationship
 push @DBIx::Custom::CARP_NOT, __PACKAGE__;
 
-has [qw/dbi param/],
-  clause => sub { [] };
+has 'dbi';
+has 'param';
+has clause => sub { [] };
+has 'join';
 
 sub new {
   my $self = shift->SUPER::new(@_);
@@ -239,6 +241,15 @@ If all parameter names is exists.
 
 L<DBIx::Custom> object.
 
+=head2 join
+
+  my $join = $where->join;
+  $join = $where->join($join);
+
+join information. This values is addd to select method C<join> option values.
+
+  $where->join(['left join author on book.author = authro.id']);
+  
 =head1 METHODS
 
 L<DBIx::Custom::Where> inherits all methods from L<Object::Simple>

@@ -2,7 +2,7 @@ use 5.008007;
 package DBIx::Custom;
 use Object::Simple -base;
 
-our $VERSION = '0.34';
+our $VERSION = '0.35';
 
 use Carp 'croak';
 use DBI;
@@ -18,7 +18,6 @@ use DBIx::Custom::Mapper;
 use DBIx::Custom::NotExists;
 use Encode qw/encode encode_utf8 decode_utf8/;
 use Scalar::Util qw/weaken/;
-
 
 has [qw/connector dsn default_schema password quote user exclude_table user_table_info
      user_column_info safety_character/],
@@ -69,7 +68,6 @@ has [qw/connector dsn default_schema password quote user exclude_table user_tabl
   stash => sub { {} };
 
 has mytable_symbol => '__MY__';
-has 'last_sth';
 
 sub available_datatype {
   my $self = shift;
@@ -593,7 +591,6 @@ sub execute {
   }
 
   # Affected of insert, update, or delete
-  $self->last_sth($sth);
   if (!$sth->{NUM_OF_FIELDS} && $opt{statement} ne 'select') {
     # Non-Blocking
     if (my $cb = $opt{async}) {
@@ -1159,7 +1156,22 @@ sub select {
   unshift @$tables, @{$self->_search_tables($w->{clause})};
   
   # Join statement
-  $self->_push_join(\$sql, $opt{join}, $tables) if defined $opt{join};
+  my $join = [];
+  if (defined $opt{join}) {
+    my $opt_join = $opt{join};
+    if (ref $opt_join eq 'ARRAY') {
+      push @$join, @$opt_join;
+    }
+    else { push @$join, $opt_join }
+  }
+  if (defined $w->{join}) {
+    my $where_join = $w->{join};
+    if (ref $where_join eq 'ARRAY') {
+      push @$join, @$where_join;
+    }
+    else { push @$join, $where_join }
+  }
+  $self->_push_join(\$sql, $join, $tables) if @$join;
   
   # Add where clause
   $sql .= "$w->{clause} ";
@@ -1694,11 +1706,6 @@ sub _option {
 
 sub _push_join {
   my ($self, $sql, $join, $join_tables) = @_;
-  
-  $join = [$join] unless ref $join eq 'ARRAY';
-  
-  # No join
-  return unless @$join;
   
   # Push join clause
   my $tree = {};
@@ -2427,12 +2434,6 @@ Filters, registered by C<register_filter> method.
   $dbi = $dbi->last_sql($last_sql);
 
 Get last succeeded SQL executed by C<execute> method.
-
-=head2 (EXPERIMENTAL) last_sth
-
-  my $last_sth = $dbi->last_sth;
-
-Get last executed statement handle.
 
 =head2 now
 
@@ -3773,10 +3774,10 @@ You can use this in insert statement.
 
 =head2 where
 
-  my $where = $dbi->where(
-    clause => ['and', 'title = :title', 'author = :author'],
-    param => {title => 'Perl', author => 'Ken'}
-  );
+  my $where = $dbi->where;
+  $where->clause(['and', 'title = :title', 'author = :author']);
+  $where->param({title => 'Perl', author => 'Ken'});
+  $where->join(['left join author on book.author = author.id]);
 
 Create a new L<DBIx::Custom::Where> object.
 See L<DBIx::Custom::Where> to know how to create where clause.
